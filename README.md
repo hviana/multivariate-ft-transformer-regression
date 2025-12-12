@@ -1,4 +1,4 @@
-Model: # 📚 Multivariate Convolutional Regression
+Model: # 📚 Multivariate FT transformer Regression
 
 <div align="center">
 
@@ -8,8 +8,8 @@ Model: # 📚 Multivariate Convolutional Regression
 
 **Author:** Henrique Emanoel Viana
 
-[📦 JSR Package](https://jsr.io/@hviana/multivariate-convolutional-regression) •
-[📂 GitHub](https://github.com/hviana/polynomial-regression) •
+[📦 JSR Package](https://jsr.io/@hviana/multivariate-ft-transformer-regression)
+• [📂 GitHub](https://github.com/hviana/polynomial-regression) •
 [📄 License](./LICENSE)
 
 </div>
@@ -87,7 +87,7 @@ Model: # 📚 Multivariate Convolutional Regression
 ### 📦 Installation
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 ```
 
 ### 🎮 Basic Usage
@@ -848,7 +848,7 @@ model.load(fileState);
 ### 📈 Time Series Forecasting
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 // Create model optimized for time series
 const model = new FTTransformerRegression({
@@ -902,7 +902,7 @@ forecast.predictions.forEach((pred, i) => {
 ### 🏠 Multi-Output Regression
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 // House price prediction with multiple outputs
 const model = new FTTransformerRegression({
@@ -946,7 +946,7 @@ console.log(`   Days on Market: ${Math.round(daysOnMarket)}`);
 ### 🔄 Online Learning with Drift Detection
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 const model = new FTTransformerRegression({
   numBlocks: 3,
@@ -999,7 +999,7 @@ async function processStream(
 ### 💾 Model Persistence
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 // Training phase
 const model = new FTTransformerRegression();
@@ -1037,7 +1037,7 @@ console.log("Model loaded successfully, making predictions...");
 ### 🎛️ Custom Training Loop
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 class ModelTrainer {
   private model: FTTransformerRegression;
@@ -1097,7 +1097,7 @@ class ModelTrainer {
 ### 📊 Model Monitoring Dashboard
 
 ```typescript
-import { FTTransformerRegression } from "jsr:@hviana/multivariate-convolutional-regression";
+import { FTTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
 function printDashboard(model: FTTransformerRegression) {
   const summary = model.getModelSummary();
@@ -1298,8 +1298,9 @@ SOFTWARE.
 
 ### 🌟 Star this repository if you find it useful!
 
-**[📦 JSR Package](https://jsr.io/@hviana/multivariate-convolutional-regression)**
-• **[📂 GitHub Repository](https://github.com/hviana/polynomial-regression)**
+**[📦 JSR Package](https://jsr.io/@hviana/multivariate-ft-transformer-regression)**
+•
+**[📂 GitHub Repository](https://github.com/hviana/multivariate-ft-transformer-regression)**
 
 Made with ❤️ by [Henrique Emanoel Viana](https://github.com/hviana)
 
