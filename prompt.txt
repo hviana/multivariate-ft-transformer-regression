@@ -1,0 +1,73 @@
+Model: Implement TypeScript library "FTTransformerRegression": FT-Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
+
+PERFORMANCE:
+- Minimize memory allocations by reusing arrays and objects wherever possible
+- Use typed arrays (Float64Array) for all numerical computations
+- Avoid creating intermediate arrays in hot paths
+- Implement in-place matrix operations
+- Use object pooling for frequently created objects
+- Minimize garbage collection pressure
+- Cache computed values that are reused
+- Use efficient loop structures (avoid forEach, map, reduce in critical paths)
+- Preallocate buffers for attention scores and layer activations
+- Implement lazy initialization where appropriate
+- Use iterative methods to prevent memory overallocation
+- Write code that is highly CPU-optimized as well
+
+DESIGN:
+- Full numerical stability; OOP with interfaces for public contracts
+- Private field encapsulation; JSDoc (@param, @returns, @example)
+- Inline math formula docs; normalize inputs; track running average loss for accuracy
+
+CONFIG (defaults):
+numBlocks: 3, embeddingDim: 64, numHeads: 8, ffnMultiplier: 4, attentionDropout: 0.0, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
+
+API:
+fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
+predict(futureSteps: number): PredictionResult → Predictions
+getModelSummary(): ModelSummary | getWeights(): WeightInfo | getNormalizationStats(): NormalizationStats | reset(): void
+save(): string //JSON.stringify in all state data
+load(w: string) //JSON string of all state data
+
+TYPES:
+FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected }
+PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
+SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
+WeightInfo { featureEmbeddings, clsToken, attentionWeights, ffnWeights, layerNormParams, outputWeights, firstMoment, secondMoment: number[][][], updateCount }
+NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
+ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embeddingDim, numHeads, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
+
+ALGORITHMS:
+
+FT-Transformer Architecture:
+1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length
+2. Feature Tokenizer: Each feature xᵢ → eᵢ = xᵢ · Wᵢ + bᵢ ∈ ℝ^embeddingDim (linear embedding per feature)
+3. CLS Token: Prepend learnable [CLS] ∈ ℝ^embeddingDim → sequence [CLS, e₁, ..., eₙ]
+4. Transformer Block × numBlocks: LayerNorm → Multi-Head Self-Attention → Residual → LayerNorm → FFN → Residual
+5. Output: Dense([CLS]_final) → ŷ ∈ ℝ^outputDim
+
+Multi-Head Self-Attention:
+1. Project: Qₕ = XWᵠₕ, Kₕ = XWᵏₕ, Vₕ = XWᵛₕ, dₖ = embeddingDim/numHeads
+2. Scores: Aₕ = softmax(QₕKₕᵀ / √dₖ)Vₕ
+3. Output: MultiHead = Concat(A₁,...,Aₕ)Wᵒ + b
+
+Feed-Forward Network:
+FFN(x) = GELU(xW₁ + b₁)W₂ + b₂, hidden_dim = embeddingDim × ffnMultiplier
+
+Adam + Cosine Warmup:
+1. Normalize: x̃ = (x - μ)/(σ + ε)
+2. Forward: propagate through transformer blocks, cache activations for backprop
+3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
+4. Backprop: ∂L/∂W via chain rule through attention and FFN layers
+5. LR: warmup → cosine decay
+6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
+
+Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ), σ² = M₂/(n-1) → inputs (normalize)
+
+Accuracy: track running average loss L̄ = ΣLoss/n; accuracy = 1/(1 + L̄)
+
+ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(δ); shrink window; reset stats on drift
+
+Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
+
+Export: FTTransformerRegression
