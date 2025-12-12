@@ -9,8 +9,8 @@ Model: # 📚 Multivariate FT transformer Regression
 **Author:** Henrique Emanoel Viana
 
 [📦 JSR Package](https://jsr.io/@hviana/multivariate-ft-transformer-regression)
-• [📂 GitHub](https://github.com/hviana/polynomial-regression) •
-[📄 License](./LICENSE)
+• [📂 GitHub](https://github.com/hviana/multivariate-ft-transformer-regression)
+• [📄 License](./LICENSE)
 
 </div>
 
