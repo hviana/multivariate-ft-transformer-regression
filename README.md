@@ -1,29 +1,37 @@
-📊 Fusion Temporal Transformer Regression
+🚀 Multivariate FT-Transformer Regression
 
 <div align="center">
 
-**A powerful multivariate time-series regression library with incremental online
-learning capabilities**
+**A Fusion Temporal Transformer for Multivariate Regression with Incremental
+Online Learning**
 
 [📦 JSR Package](https://jsr.io/@hviana/multivariate-ft-transformer-regression)
-• [🐙 GitHub](https://github.com/hviana/multivariate-ft-transformer-regression)
-• [📚 Documentation](#-api-reference)
+• [💻 GitHub](https://github.com/hviana/multivariate-ft-transformer-regression)
+• [📖 Documentation](#-table-of-contents)
+
+---
+
+_Zero dependencies • Pure TypeScript • Online Learning • Production Ready_
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## 📑 Table of Contents
 
 - [✨ Features](#-features)
-- [🏗️ Architecture](#️-architecture)
+- [🏗️ Architecture Overview](#️-architecture-overview)
 - [📦 Installation](#-installation)
 - [🚀 Quick Start](#-quick-start)
-- [📖 API Reference](#-api-reference)
-- [⚙️ Configuration Guide](#️-configuration-guide)
-- [💡 Examples](#-examples)
-- [🎯 Best Practices](#-best-practices)
-- [🔧 Troubleshooting](#-troubleshooting)
+- [🔧 Configuration](#-configuration)
+- [📚 API Reference](#-api-reference)
+- [🧠 Core Concepts](#-core-concepts)
+- [⚡ Parameter Optimization Guide](#-parameter-optimization-guide)
+- [📊 Use Cases](#-use-cases)
+- [🔬 Mathematical Foundation](#-mathematical-foundation)
+- [💾 Model Persistence](#-model-persistence)
+- [📈 Performance Tips](#-performance-tips)
+- [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
 
 ---
@@ -34,45 +42,26 @@ learning capabilities**
 <tr>
 <td width="50%">
 
-### 🧠 Advanced Architecture
+### 🧠 **Core ML Features**
 
-- **Multi-scale temporal convolution** for capturing patterns at different time
+- 🔄 **Online Learning** - Train incrementally on streaming data
+- 🎯 **Multi-scale Temporal Convolutions** - Capture patterns at different time
   scales
-- **Gated cross-scale fusion** for intelligent feature combination
-- **Transformer blocks** with self-attention mechanism
-- **Attention-weighted temporal pooling** for sequence aggregation
+- 🔍 **Multi-head Self-Attention** - Learn complex temporal dependencies
+- 📊 **Multivariate Support** - Handle multiple input/output dimensions
+- 📉 **Uncertainty Estimation** - Confidence intervals for predictions
 
 </td>
 <td width="50%">
 
-### 📈 Online Learning
+### ⚙️ **Advanced Capabilities**
 
-- **Incremental training** - learn from streaming data
-- **Adam optimizer** with warmup & cosine decay
-- **ADWIN-lite drift detection** for concept drift
-- **Outlier downweighting** for robust training
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-### 🔒 Numerical Stability
-
-- **Stable softmax** with max-subtraction
-- **LayerNorm** with epsilon protection
-- **Welford algorithm** for streaming statistics
-- **Causal masking** preventing future leakage
-
-</td>
-<td width="50%">
-
-### 📊 Predictions & Monitoring
-
-- **Confidence intervals** with uncertainty estimation
-- **Multi-step forecasting** with widening uncertainty
-- **Real-time model metrics** and convergence tracking
-- **Complete state serialization** for model persistence
+- 🚀 **Adam Optimizer** with warmup & cosine decay
+- 📈 **Welford's Algorithm** for online normalization
+- 🛡️ **L2 Regularization** to prevent overfitting
+- 🎚️ **Outlier Downweighting** for robust training
+- 🔔 **ADWIN Drift Detection** for concept drift
+- ⚖️ **Xavier Initialization** for stable training
 
 </td>
 </tr>
@@ -80,136 +69,133 @@ learning capabilities**
 
 ---
 
-## 🏗️ Architecture
-
-### High-Level Overview
+## 🏗️ Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FUSION TEMPORAL TRANSFORMER (FTT)                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────┐    ┌─────────────────┐    ┌──────────────────────────────┐│
-│  │   INPUT     │    │  MULTI-SCALE    │    │     TRANSFORMER STACK       ││
-│  │  SEQUENCE   │───▶│  CONVOLUTION    │───▶│                              ││
-│  │ [T × D_in]  │    │  + FUSION       │    │  ┌─────────────────────────┐ ││
-│  └─────────────┘    └─────────────────┘    │  │ Block 1: LN→MHA→LN→FFN │ ││
-│                                             │  ├─────────────────────────┤ ││
-│                                             │  │ Block 2: LN→MHA→LN→FFN │ ││
-│                                             │  ├─────────────────────────┤ ││
-│                                             │  │ Block N: LN→MHA→LN→FFN │ ││
-│                                             │  └─────────────────────────┘ ││
-│                                             └──────────────────────────────┘│
-│                                                            │                │
-│                                                            ▼                │
-│  ┌─────────────┐    ┌─────────────────┐    ┌──────────────────────────────┐│
-│  │   OUTPUT    │    │    OUTPUT       │    │   ATTENTION POOLING          ││
-│  │ PREDICTION  │◀───│    LAYER        │◀───│   [T × E] → [E]              ││
-│  │  [D_out]    │    │  [E → D_out]    │    │                              ││
-│  └─────────────┘    └─────────────────┘    └──────────────────────────────┘│
-│                                                                             │
+│                    FUSION TEMPORAL TRANSFORMER ARCHITECTURE                  │
 └─────────────────────────────────────────────────────────────────────────────┘
+
+                              ┌─────────────────┐
+                              │   Input Data    │
+                              │  [seq × input]  │
+                              └────────┬────────┘
+                                       │
+                    ┌──────────────────┼──────────────────┐
+                    │                  │                  │
+                    ▼                  ▼                  ▼
+         ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+         │ Temporal Conv    │ │ Temporal Conv    │ │ Temporal Conv    │
+         │   Scale = 1      │ │   Scale = 2      │ │   Scale = 4      │
+         │  ┌───────────┐   │ │  ┌───────────┐   │ │  ┌───────────┐   │
+         │  │ 1D Conv   │   │ │  │ 1D Conv   │   │ │  │ 1D Conv   │   │
+         │  │ + GELU    │   │ │  │ + GELU    │   │ │  │ + GELU    │   │
+         │  └───────────┘   │ │  └───────────┘   │ │  └───────────┘   │
+         └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘
+                  │                    │                    │
+                  ▼                    ▼                    ▼
+         ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+         │ + Scale Embed    │ │ + Scale Embed    │ │ + Scale Embed    │
+         │ + Pos Encoding   │ │ + Pos Encoding   │ │ + Pos Encoding   │
+         └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘
+                  │                    │                    │
+                  └──────────────┬─────┴─────┬──────────────┘
+                                 │ Upsample  │
+                                 │ & Concat  │
+                                 └─────┬─────┘
+                                       │
+                              ┌────────▼────────┐
+                              │  Fusion Gate    │
+                              │  (Sigmoid)      │
+                              │  + Dropout      │
+                              └────────┬────────┘
+                                       │
+                    ╔══════════════════╧══════════════════╗
+                    ║     TRANSFORMER BLOCKS (×N)         ║
+                    ╠═════════════════════════════════════╣
+                    ║  ┌───────────────────────────────┐  ║
+                    ║  │      Layer Norm 1             │  ║
+                    ║  └───────────────┬───────────────┘  ║
+                    ║                  │                  ║
+                    ║  ┌───────────────▼───────────────┐  ║
+                    ║  │   Multi-Head Self-Attention   │  ║
+                    ║  │  ┌─────┬─────┬─────┬─────┐   │  ║
+                    ║  │  │ Wq  │ Wk  │ Wv  │ Wo  │   │  ║
+                    ║  │  └─────┴─────┴─────┴─────┘   │  ║
+                    ║  │      Causal Masking          │  ║
+                    ║  └───────────────┬───────────────┘  ║
+                    ║                  │ + Residual       ║
+                    ║  ┌───────────────▼───────────────┐  ║
+                    ║  │      Layer Norm 2             │  ║
+                    ║  └───────────────┬───────────────┘  ║
+                    ║                  │                  ║
+                    ║  ┌───────────────▼───────────────┐  ║
+                    ║  │    Feed-Forward Network       │  ║
+                    ║  │  Linear → GELU → Linear       │  ║
+                    ║  └───────────────┬───────────────┘  ║
+                    ║                  │ + Residual       ║
+                    ╚══════════════════╧══════════════════╝
+                                       │
+                              ┌────────▼────────┐
+                              │ Attention Pool  │
+                              │ (Weighted Sum)  │
+                              └────────┬────────┘
+                                       │
+                              ┌────────▼────────┐
+                              │  Output Head    │
+                              │  Linear Layer   │
+                              └────────┬────────┘
+                                       │
+                              ┌────────▼────────┐
+                              │   Predictions   │
+                              │  [output_dim]   │
+                              └─────────────────┘
 ```
 
-### Multi-Scale Temporal Processing
-
-```
-INPUT SEQUENCE                    MULTI-SCALE CONVOLUTION
-     │                                    │
-     │                           ┌────────┼────────┐
-     ▼                           ▼        ▼        ▼
-┌─────────────┐            ┌─────────┐┌─────────┐┌─────────┐
-│ x₁ x₂ x₃...│            │Scale=1  ││Scale=2  ││Scale=4  │
-│ [T × D_in] │            │(Fine)   ││(Medium) ││(Coarse) │
-└─────────────┘            │stride=1 ││stride=2 ││stride=4 │
-                           └────┬────┘└────┬────┘└────┬────┘
-                                │          │          │
-                                ▼          ▼          ▼
-                           ┌──────────────────────────────┐
-                           │    GATED CROSS-SCALE FUSION  │
-                           │                              │
-                           │  g_s = σ(W_g · concat(E) + b)│
-                           │  fused = Σ g_s · E_s         │
-                           └──────────────────────────────┘
-                                         │
-                                         ▼
-                                   [T × Embed]
-```
-
-### Transformer Block Detail
-
-```
-          INPUT [T × E]
-               │
-┌──────────────┼──────────────┐
-│              │              │
-│         ┌────▼────┐         │
-│         │LayerNorm│         │
-│         └────┬────┘         │
-│              │              │
-│    ┌─────────▼─────────┐    │
-│    │  Multi-Head Self  │    │
-│    │    Attention      │    │
-│    │   (Causal Mask)   │    │
-│    └─────────┬─────────┘    │
-│              │              │
-└──────────────┼──────────────┘
-          ADD (Residual)
-               │
-┌──────────────┼──────────────┐
-│              │              │
-│         ┌────▼────┐         │
-│         │LayerNorm│         │
-│         └────┬────┘         │
-│              │              │
-│    ┌─────────▼─────────┐    │
-│    │   Feed-Forward    │    │
-│    │  (GELU Activation)│    │
-│    │  [E → 4E → E]     │    │
-│    └─────────┬─────────┘    │
-│              │              │
-└──────────────┼──────────────┘
-          ADD (Residual)
-               │
-               ▼
-         OUTPUT [T × E]
-```
-
-### Data Flow Pipeline
+### 📊 Data Flow Diagram
 
 ```mermaid
-graph LR
-    A[Raw Input] --> B[Welford Normalization]
-    B --> C[Multi-Scale Conv]
-    C --> D[Positional Encoding]
-    D --> E[Scale Embeddings]
-    E --> F[Gated Fusion]
-    F --> G[Transformer Blocks]
-    G --> H[Attention Pooling]
-    H --> I[Output Layer]
-    I --> J[Denormalization]
-    J --> K[Prediction]
+graph TD
+    A[📥 Input Sequence] --> B[🔄 Z-Score Normalization]
+    B --> C[🌊 Multi-Scale Temporal Conv]
+    C --> D[➕ Positional + Scale Embeddings]
+    D --> E[🚪 Fusion Gating]
+    E --> F[🔁 Transformer Blocks]
+    F --> G[🎯 Attention Pooling]
+    G --> H[📤 Output Head]
+    H --> I[📊 Predictions + Uncertainty]
     
-    style A fill:#e1f5fe
-    style K fill:#c8e6c9
-    style F fill:#fff3e0
-    style G fill:#fce4ec
+    J[📈 Target Values] --> K[📉 Loss Computation]
+    H --> K
+    K --> L[⬅️ Backpropagation]
+    L --> M[⚡ Adam Optimizer Update]
+    M --> N[🔍 Drift Detection]
 ```
 
 ---
 
 ## 📦 Installation
 
-### Using JSR (Recommended)
+### Deno / JSR
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
+import { ConvolutionalRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 ```
 
-### Using Deno
+### Import Map (deno.json)
+
+```json
+{
+  "imports": {
+    "@hviana/ft-transformer": "jsr:@hviana/multivariate-ft-transformer-regression"
+  }
+}
+```
+
+Then use:
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "https://jsr.io/@hviana/multivariate-ft-transformer-regression/mod.ts";
+import { ConvolutionalRegression } from "@hviana/ft-transformer";
 ```
 
 ---
@@ -219,1101 +205,1295 @@ import { FusionTemporalTransformerRegression } from "https://jsr.io/@hviana/mult
 ### Basic Example
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
+import { ConvolutionalRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
 
-// Create model with default configuration
-const model = new FusionTemporalTransformerRegression();
+// 1️⃣ Create model with default configuration
+const model = new ConvolutionalRegression();
 
-// Training data: sequence of [feature1, feature2] pairs
-const xCoordinates = [
-  [1.0, 2.0], // t=0
-  [2.0, 3.0], // t=1
-  [3.0, 4.0], // t=2
-  [4.0, 5.0], // t=3
+// 2️⃣ Prepare training data (time series)
+const trainingData = [
+  {
+    xCoordinates: [[1, 2], [3, 4], [5, 6], [7, 8]], // [seqLen][inputDim]
+    yCoordinates: [[10], [20], [30], [40]], // [seqLen][outputDim]
+  },
+  // ... more samples
 ];
 
-// Target: what we want to predict (uses last row)
-const yCoordinates = [
-  [0.1], // t=0
-  [0.2], // t=1
-  [0.25], // t=2
-  [0.3], // t=3 ← This is the actual target
-];
+// 3️⃣ Train online (incremental learning)
+for (const sample of trainingData) {
+  const result = model.fitOnline(sample);
 
-// Train incrementally
-const fitResult = model.fitOnline({ xCoordinates, yCoordinates });
+  console.log(`📊 Sample ${result.sampleIndex}:`);
+  console.log(`   Loss: ${result.loss.toFixed(6)}`);
+  console.log(`   Gradient Norm: ${result.gradientNorm.toFixed(6)}`);
+  console.log(`   Learning Rate: ${result.effectiveLearningRate.toFixed(6)}`);
+  console.log(`   Converged: ${result.converged ? "✅" : "❌"}`);
+  console.log(`   Drift Detected: ${result.driftDetected ? "⚠️" : "✓"}`);
+}
 
-console.log(`📉 Loss: ${fitResult.loss.toFixed(6)}`);
-console.log(`📊 Gradient Norm: ${fitResult.gradientNorm.toFixed(6)}`);
-console.log(`✅ Converged: ${fitResult.converged}`);
+// 4️⃣ Make predictions
+const predictions = model.predict(5); // Predict 5 future steps
 
-// Make predictions for next 3 steps
-const predictions = model.predict(3);
-
-predictions.predictions.forEach((pred, i) => {
-  console.log(`Step ${i + 1}:`, {
-    predicted: pred.predicted[0].toFixed(4),
-    confidence: `[${pred.lowerBound[0].toFixed(4)}, ${
-      pred.upperBound[0].toFixed(4)
+for (let i = 0; i < predictions.predictions.length; i++) {
+  const pred = predictions.predictions[i];
+  console.log(`\n🔮 Step ${i + 1}:`);
+  console.log(`   Predicted: ${pred.predicted.map((v) => v.toFixed(3))}`);
+  console.log(
+    `   95% CI: [${pred.lowerBound.map((v) => v.toFixed(3))}] - [${
+      pred.upperBound.map((v) => v.toFixed(3))
     }]`,
-  });
+  );
+  console.log(`   Std Error: ${pred.standardError.map((v) => v.toFixed(3))}`);
+}
+
+// 5️⃣ Check model summary
+const summary = model.getModelSummary();
+console.log("\n📈 Model Summary:", summary);
+```
+
+### Custom Configuration Example
+
+```typescript
+const model = new ConvolutionalRegression({
+  // Architecture
+  numBlocks: 4, // More transformer blocks for complex patterns
+  embeddingDim: 128, // Larger embeddings for more capacity
+  numHeads: 8, // Must divide embeddingDim evenly
+  ffnMultiplier: 4, // FFN hidden = 128 * 4 = 512
+
+  // Temporal processing
+  temporalScales: [1, 2, 4, 8], // Multi-scale analysis
+  temporalKernelSize: 5, // Larger receptive field
+  maxSequenceLength: 1024, // Longer sequences
+
+  // Optimization
+  learningRate: 0.0005, // Lower LR for stability
+  warmupSteps: 200, // Longer warmup
+  totalSteps: 50000, // Longer cosine decay
+
+  // Regularization
+  regularizationStrength: 1e-5, // Less regularization
+  attentionDropout: 0.1, // Add dropout
+  fusionDropout: 0.05, // Fusion dropout
+
+  // Robustness
+  outlierThreshold: 2.5, // More aggressive outlier detection
+  adwinDelta: 0.001, // More sensitive drift detection
 });
 ```
 
-### Output
-
-```
-📉 Loss: 0.125432
-📊 Gradient Norm: 0.034521
-✅ Converged: false
-Step 1: { predicted: '0.3245', confidence: '[-0.1234, 0.7724]' }
-Step 2: { predicted: '0.3512', confidence: '[-0.2156, 0.9180]' }
-Step 3: { predicted: '0.3801', confidence: '[-0.3012, 1.0614]' }
-```
-
 ---
 
-## 📖 API Reference
-
-### Constructor
-
-```typescript
-const model = new FusionTemporalTransformerRegression(config?: Partial<FusionTemporalTransformerRegressionConfig>);
-```
-
-### Methods
-
-| Method                    | Description                    | Returns              |
-| ------------------------- | ------------------------------ | -------------------- |
-| `fitOnline(data)`         | Train model on a single sample | `FitResult`          |
-| `predict(steps)`          | Generate predictions           | `PredictionResult`   |
-| `getModelSummary()`       | Get model information          | `ModelSummary`       |
-| `getWeights()`            | Export all weights             | `WeightInfo`         |
-| `getNormalizationStats()` | Get normalization statistics   | `NormalizationStats` |
-| `reset()`                 | Reset model to initial state   | `void`               |
-| `save()`                  | Serialize model to JSON string | `string`             |
-| `load(json)`              | Load model from JSON string    | `void`               |
-
-### Type Definitions
-
-#### FitResult
-
-```typescript
-interface FitResult {
-  loss: number; // Combined MSE + L2 loss
-  gradientNorm: number; // L2 norm of all gradients
-  effectiveLearningRate: number; // Current LR after scheduling
-  isOutlier: boolean; // Whether sample was detected as outlier
-  converged: boolean; // Whether gradient norm < threshold
-  sampleIndex: number; // Total samples seen
-  driftDetected: boolean; // Whether ADWIN detected drift
-}
-```
-
-#### PredictionResult
-
-```typescript
-interface PredictionResult {
-  predictions: SinglePrediction[]; // Array of predictions per step
-  accuracy: number; // Model accuracy metric (0-1)
-  sampleCount: number; // Total training samples
-  isModelReady: boolean; // Whether model can predict
-}
-
-interface SinglePrediction {
-  predicted: number[]; // Predicted values
-  lowerBound: number[]; // 95% CI lower bound
-  upperBound: number[]; // 95% CI upper bound
-  standardError: number[]; // Standard error per output
-}
-```
-
-#### ModelSummary
-
-```typescript
-interface ModelSummary {
-  isInitialized: boolean;
-  inputDimension: number;
-  outputDimension: number;
-  numBlocks: number;
-  embeddingDim: number;
-  numHeads: number;
-  temporalScales: number[];
-  totalParameters: number;
-  sampleCount: number;
-  accuracy: number;
-  converged: boolean;
-  effectiveLearningRate: number;
-  driftCount: number;
-}
-```
-
----
-
-## ⚙️ Configuration Guide
+## 🔧 Configuration
 
 ### Complete Configuration Reference
 
 ```typescript
-interface FusionTemporalTransformerRegressionConfig {
-  // ═══════════════════════════════════════════════════════════════════
-  // 🏗️ ARCHITECTURE PARAMETERS
-  // ═══════════════════════════════════════════════════════════════════
-
+interface Config {
+  // 🏗️ Architecture Parameters
   numBlocks: number; // Number of transformer blocks
   embeddingDim: number; // Embedding dimension (must be divisible by numHeads)
   numHeads: number; // Number of attention heads
-  ffnMultiplier: number; // FFN hidden size = embeddingDim × ffnMultiplier
-  temporalScales: number[]; // Convolution stride scales
+  ffnMultiplier: number; // FFN hidden dimension = embeddingDim × ffnMultiplier
+
+  // ⏱️ Temporal Processing
+  temporalScales: number[]; // Multi-scale temporal convolution scales
   temporalKernelSize: number; // Convolution kernel size
   maxSequenceLength: number; // Maximum input sequence length
 
-  // ═══════════════════════════════════════════════════════════════════
-  // 📉 OPTIMIZER PARAMETERS
-  // ═══════════════════════════════════════════════════════════════════
+  // 🎛️ Regularization
+  attentionDropout: number; // Dropout rate for attention weights
+  fusionDropout: number; // Dropout rate for fusion gate
+  regularizationStrength: number; // L2 regularization coefficient
 
+  // ⚡ Optimization
   learningRate: number; // Base learning rate
-  warmupSteps: number; // Steps for linear warmup
-  totalSteps: number; // Total steps for cosine decay
+  warmupSteps: number; // LR warmup steps
+  totalSteps: number; // Total steps for LR schedule
   beta1: number; // Adam first moment decay
   beta2: number; // Adam second moment decay
-  epsilon: number; // Numerical stability constant
+  epsilon: number; // Adam numerical stability term
 
-  // ═══════════════════════════════════════════════════════════════════
-  // 🎛️ REGULARIZATION & STABILITY
-  // ═══════════════════════════════════════════════════════════════════
-
-  regularizationStrength: number; // L2 regularization coefficient
-  convergenceThreshold: number; // Gradient norm for convergence
-  outlierThreshold: number; // Z-score threshold for outliers
-  adwinDelta: number; // ADWIN confidence parameter
-
-  // ═══════════════════════════════════════════════════════════════════
-  // 💧 DROPOUT (Currently implemented as 0)
-  // ═══════════════════════════════════════════════════════════════════
-
-  attentionDropout: number; // Dropout in attention (reserved)
-  fusionDropout: number; // Dropout in fusion (reserved)
+  // 🎯 Training Control
+  convergenceThreshold: number; // Gradient norm convergence threshold
+  outlierThreshold: number; // Z-score outlier threshold
+  adwinDelta: number; // ADWIN drift detection sensitivity
 }
 ```
 
-### Parameter Optimization Guide
-
-#### 🏗️ Architecture Parameters
-
-<details>
-<summary><b>numBlocks</b> (default: 3)</summary>
-
-**What it controls:** The depth of the transformer stack.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  numBlocks = 1        │  numBlocks = 3      │  numBlocks = 6    │
-│  ┌─────────┐          │  ┌─────────┐        │  ┌─────────┐      │
-│  │ Block 1 │          │  │ Block 1 │        │  │ Block 1 │      │
-│  └─────────┘          │  │ Block 2 │        │  │ Block 2 │      │
-│                       │  │ Block 3 │        │  │ Block 3 │      │
-│  Fast, simple         │  └─────────┘        │  │ Block 4 │      │
-│  patterns             │  Balanced           │  │ Block 5 │      │
-│                       │                     │  │ Block 6 │      │
-│                       │                     │  └─────────┘      │
-│                       │                     │  Complex patterns │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Optimization Guide:**
-
-| Scenario                       | Recommended | Reason                    |
-| ------------------------------ | ----------- | ------------------------- |
-| Simple linear trends           | 1-2         | Less overfitting          |
-| Moderate complexity            | 3           | Good balance              |
-| Complex multi-scale patterns   | 4-6         | More representation power |
-| Limited data (<1000 samples)   | 1-2         | Prevent overfitting       |
-| Abundant data (>10000 samples) | 4-6         | Utilize capacity          |
-
-**Example:**
+### Default Configuration Values
 
 ```typescript
-// For stock price prediction with complex patterns
-const model = new FusionTemporalTransformerRegression({
-  numBlocks: 4,
-});
-
-// For simple sensor data
-const simpleModel = new FusionTemporalTransformerRegression({
-  numBlocks: 2,
-});
-```
-
-</details>
-
-<details>
-<summary><b>embeddingDim</b> (default: 64)</summary>
-
-**What it controls:** The internal representation size throughout the model.
-
-**⚠️ Constraint:** Must be divisible by `numHeads`
-
-```
-embeddingDim = 32  →  Lightweight, fast
-embeddingDim = 64  →  Balanced (default)
-embeddingDim = 128 →  High capacity
-embeddingDim = 256 →  Maximum expressiveness
-```
-
-**Memory & Compute Impact:**
-
-| embeddingDim | Parameters* | Relative Speed |
-| ------------ | ----------- | -------------- |
-| 32           | ~50K        | 4× faster      |
-| 64           | ~200K       | 1× (baseline)  |
-| 128          | ~800K       | 4× slower      |
-| 256          | ~3.2M       | 16× slower     |
-
-*Approximate, varies with other settings
-
-**Optimization Guide:**
-
-```typescript
-// Real-time applications - prioritize speed
-const fastModel = new FusionTemporalTransformerRegression({
-  embeddingDim: 32,
-  numHeads: 4, // 32/4 = 8 dim per head
-});
-
-// High-dimensional input data
-const richModel = new FusionTemporalTransformerRegression({
-  embeddingDim: 128,
-  numHeads: 8, // 128/8 = 16 dim per head
-});
-```
-
-</details>
-
-<details>
-<summary><b>numHeads</b> (default: 8)</summary>
-
-**What it controls:** Number of parallel attention mechanisms.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    MULTI-HEAD ATTENTION                      │
-│                                                              │
-│  numHeads = 4                    numHeads = 8                │
-│  ┌─────┬─────┬─────┬─────┐      ┌──┬──┬──┬──┬──┬──┬──┬──┐  │
-│  │Head1│Head2│Head3│Head4│      │H1│H2│H3│H4│H5│H6│H7│H8│  │
-│  └─────┴─────┴─────┴─────┘      └──┴──┴──┴──┴──┴──┴──┴──┘  │
-│                                                              │
-│  Fewer, broader attention        More, specialized attention │
-│  patterns                        patterns                    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Dimension per head:** `d_k = embeddingDim / numHeads`
-
-| embeddingDim | numHeads | d_k | Recommendation |
-| ------------ | -------- | --- | -------------- |
-| 64           | 4        | 16  | ✅ Good        |
-| 64           | 8        | 8   | ✅ Default     |
-| 64           | 16       | 4   | ⚠️ Too small   |
-| 128          | 8        | 16  | ✅ Good        |
-| 128          | 16       | 8   | ✅ Good        |
-
-**Example:**
-
-```typescript
-// Recommended: d_k between 8-32
-const model = new FusionTemporalTransformerRegression({
-  embeddingDim: 64,
-  numHeads: 8, // d_k = 8 ✅
-});
-```
-
-</details>
-
-<details>
-<summary><b>temporalScales</b> (default: [1, 2, 4])</summary>
-
-**What it controls:** Multi-resolution temporal analysis.
-
-```
-Input Sequence: [x₁, x₂, x₃, x₄, x₅, x₆, x₇, x₈]
-
-Scale = 1 (stride=1): Captures every timestep
-  │ x₁ │ x₂ │ x₃ │ x₄ │ x₅ │ x₆ │ x₇ │ x₈ │
-  
-Scale = 2 (stride=2): Captures pairs
-  │ x₁,x₂ │ x₃,x₄ │ x₅,x₆ │ x₇,x₈ │
-  
-Scale = 4 (stride=4): Captures quadruplets
-  │ x₁,x₂,x₃,x₄ │ x₅,x₆,x₇,x₈ │
-
-→ Gated Fusion combines all scales
-```
-
-**Use Case Examples:**
-
-```typescript
-// High-frequency trading (microsecond patterns)
-const hftModel = new FusionTemporalTransformerRegression({
-  temporalScales: [1, 2, 4, 8], // Fine-grained
-  maxSequenceLength: 256,
-});
-
-// Daily weather forecasting
-const weatherModel = new FusionTemporalTransformerRegression({
-  temporalScales: [1, 7, 30], // Daily, weekly, monthly
-  maxSequenceLength: 365,
-});
-
-// IoT sensor with varying patterns
-const iotModel = new FusionTemporalTransformerRegression({
-  temporalScales: [1, 3, 6, 12], // Multiple granularities
-  maxSequenceLength: 128,
-});
-```
-
-</details>
-
-<details>
-<summary><b>temporalKernelSize</b> (default: 3)</summary>
-
-**What it controls:** The receptive field of temporal convolutions.
-
-```
-Kernel Size = 3:          Kernel Size = 5:          Kernel Size = 7:
-  ┌─┬─┬─┐                   ┌─┬─┬─┬─┬─┐              ┌─┬─┬─┬─┬─┬─┬─┐
-  │◀───▶│                   │◀───────▶│              │◀─────────────▶│
-  └─┴─┴─┘                   └─┴─┴─┴─┴─┘              └─┴─┴─┴─┴─┴─┴─┘
-  Local patterns            Medium patterns          Wide patterns
-```
-
-**Recommendations:**
-
-| Data Type              | Kernel Size | Reason                |
-| ---------------------- | ----------- | --------------------- |
-| High-frequency signals | 3           | Preserve local detail |
-| Medium-frequency       | 5           | Balanced              |
-| Low-frequency trends   | 7-9         | Capture wider context |
-
-</details>
-
-<details>
-<summary><b>maxSequenceLength</b> (default: 512)</summary>
-
-**What it controls:** Maximum temporal window for processing.
-
-**⚠️ Memory Impact:** Attention is O(T²) in memory!
-
-| maxSequenceLength | Memory (approx.) | Use Case               |
-| ----------------- | ---------------- | ---------------------- |
-| 64                | ~16 MB           | Real-time, low latency |
-| 128               | ~64 MB           | Standard applications  |
-| 256               | ~256 MB          | Historical analysis    |
-| 512               | ~1 GB            | Long-term patterns     |
-
-```typescript
-// Constrained environment
-const lightModel = new FusionTemporalTransformerRegression({
-  maxSequenceLength: 64,
-  embeddingDim: 32,
-});
-
-// Server with ample memory
-const heavyModel = new FusionTemporalTransformerRegression({
-  maxSequenceLength: 512,
-  embeddingDim: 128,
-});
-```
-
-</details>
-
----
-
-#### 📉 Optimizer Parameters
-
-<details>
-<summary><b>learningRate</b> (default: 0.001)</summary>
-
-**What it controls:** Step size for parameter updates.
-
-```
-Learning Rate Schedule:
-                                
-Rate │    ╱──────╲
-     │   ╱        ╲
-     │  ╱          ╲
-     │ ╱            ╲
-     │╱              ╲___
-     └───────────────────▶
-       Warmup   Cosine Decay
-       Steps    Phase
-```
-
-**Optimization Guide:**
-
-| Scenario                | Learning Rate | Reason                  |
-| ----------------------- | ------------- | ----------------------- |
-| Fast convergence needed | 0.01          | Quick but may overshoot |
-| Standard training       | 0.001         | Balanced (default)      |
-| Fine-tuning             | 0.0001        | Gentle updates          |
-| Very noisy data         | 0.0005        | More stable             |
-
-```typescript
-// Aggressive learning for quick results
-const fastLearner = new FusionTemporalTransformerRegression({
-  learningRate: 0.005,
-  warmupSteps: 50,
-});
-
-// Conservative learning for stability
-const stableLearner = new FusionTemporalTransformerRegression({
-  learningRate: 0.0005,
-  warmupSteps: 200,
-});
-```
-
-</details>
-
-<details>
-<summary><b>warmupSteps & totalSteps</b> (defaults: 100, 10000)</summary>
-
-**What they control:** Learning rate scheduling.
-
-```
-                    Learning Rate Over Time
-                    
-    LR │        warmupSteps=100    totalSteps=10000
-       │              │                    │
-  0.001│    ╱─────────●────────────╲       │
-       │   ╱                        ╲      │
-       │  ╱                          ╲     │
-       │ ╱                            ╲    │
-       │╱                              ╲___│
-       └───────────────────────────────────▶
-         0    100              10000   Steps
-         
-Formula:
-  - Warmup:   lr = base_lr × (step / warmup_steps)
-  - Decay:    lr = base_lr × 0.5 × (1 + cos(π × progress))
-```
-
-**Configuration Examples:**
-
-```typescript
-// Short training session
-const quickTrain = new FusionTemporalTransformerRegression({
-  warmupSteps: 20,
-  totalSteps: 500,
-});
-
-// Extended training
-const longTrain = new FusionTemporalTransformerRegression({
-  warmupSteps: 500,
-  totalSteps: 50000,
-});
-```
-
-</details>
-
-<details>
-<summary><b>beta1 & beta2</b> (defaults: 0.9, 0.999)</summary>
-
-**What they control:** Adam optimizer momentum parameters.
-
-```
-Adam Update Rule:
-  m = β₁·m + (1-β₁)·g          (First moment)
-  v = β₂·v + (1-β₂)·g²         (Second moment)
-  
-  β₁ = 0.9:  90% old momentum, 10% new gradient
-  β₂ = 0.999: 99.9% old variance, 0.1% new
-```
-
-| Parameter | Effect of Higher Value                 | Effect of Lower Value                |
-| --------- | -------------------------------------- | ------------------------------------ |
-| beta1     | Smoother updates, slower adaptation    | More responsive, possibly noisy      |
-| beta2     | More stable scaling, slower adaptation | Faster adaptation, possibly unstable |
-
-```typescript
-// For very noisy gradients
-const stableAdam = new FusionTemporalTransformerRegression({
-  beta1: 0.95, // More momentum
-  beta2: 0.9999, // More stable scaling
-});
-
-// For quick adaptation
-const adaptiveAdam = new FusionTemporalTransformerRegression({
-  beta1: 0.85,
-  beta2: 0.99,
-});
-```
-
-</details>
-
----
-
-#### 🎛️ Regularization Parameters
-
-<details>
-<summary><b>regularizationStrength</b> (default: 1e-4)</summary>
-
-**What it controls:** L2 weight decay penalty.
-
-```
-Total Loss = MSE Loss + (λ/2) × Σ||W||²
-
-λ = 0:      No regularization (may overfit)
-λ = 1e-4:   Light regularization (default)
-λ = 1e-3:   Moderate regularization
-λ = 1e-2:   Strong regularization (may underfit)
-```
-
-**Visual Effect:**
-
-```
-           Low Regularization              High Regularization
-           
-Weights │  ▓▓▓░░░▓▓░░░▓▓▓░░           │  ▓░░░░▓░░░░░▓░░░░
-Distribution │  Many large weights        │  Mostly small weights
-           │  Complex model              │  Simpler model
-```
-
-```typescript
-// Complex patterns, lots of data
-const complexModel = new FusionTemporalTransformerRegression({
-  regularizationStrength: 1e-5, // Less regularization
-});
-
-// Limited data, prevent overfitting
-const simpleModel = new FusionTemporalTransformerRegression({
-  regularizationStrength: 1e-3, // More regularization
-});
-```
-
-</details>
-
-<details>
-<summary><b>outlierThreshold</b> (default: 3.0)</summary>
-
-**What it controls:** Z-score threshold for outlier detection.
-
-```
-                Normal Distribution
-                
-         │      ●●●●●●●●●●●
-         │   ●●●            ●●●
-         │ ●●                  ●●
-Density  │●                      ●
-         │         ┌──────┐
-         │      -3σ│ 99.7%│+3σ
-         └─────────┼──────┼───────▶
-                   ▼      ▼
-              outlierThreshold = 3.0
-              
-Points beyond ±3σ are flagged as outliers
-and receive reduced weight (0.1×) during training
-```
-
-| Threshold | Coverage | Outlier Sensitivity |
-| --------- | -------- | ------------------- |
-| 2.0       | 95.4%    | Very sensitive      |
-| 2.5       | 98.8%    | Sensitive           |
-| 3.0       | 99.7%    | Balanced (default)  |
-| 3.5       | 99.95%   | Conservative        |
-| 4.0       | 99.99%   | Very conservative   |
-
-```typescript
-// Sensor data with occasional spikes
-const robustModel = new FusionTemporalTransformerRegression({
-  outlierThreshold: 2.5, // More aggressive outlier detection
-});
-
-// Clean data, trust all samples
-const trustingModel = new FusionTemporalTransformerRegression({
-  outlierThreshold: 4.0, // Very conservative
-});
-```
-
-</details>
-
-<details>
-<summary><b>adwinDelta</b> (default: 0.002)</summary>
-
-**What it controls:** Sensitivity of concept drift detection.
-
-```
-ADWIN Drift Detection
-─────────────────────
-
-     Error Rate
-         │
-       ╱─│─╲    Drift Detected!
-      ╱  │  ╲        │
-  ───╱   │   ╲──●────┼────▶
-     │   │   │  ↑    │
-     │   │   │  Statistical
-     │   │   │  significance
-     └───┴───┴──test (δ)────
-     
-δ = 0.002: Sensitive (detects subtle drift)
-δ = 0.01:  Moderate
-δ = 0.05:  Conservative (only major shifts)
-```
-
-```typescript
-// Streaming data with frequent distribution shifts
-const adaptiveModel = new FusionTemporalTransformerRegression({
-  adwinDelta: 0.01, // Quick drift detection
-});
-
-// Stable environment
-const stableModel = new FusionTemporalTransformerRegression({
-  adwinDelta: 0.001, // Very sensitive
-});
-```
-
-</details>
-
----
-
-### 📊 Configuration Presets
-
-#### 🚀 High-Performance Preset
-
-```typescript
-const highPerformanceConfig = {
-  numBlocks: 4,
-  embeddingDim: 128,
-  numHeads: 8,
-  ffnMultiplier: 4,
-  temporalScales: [1, 2, 4, 8],
-  temporalKernelSize: 5,
-  maxSequenceLength: 256,
-  learningRate: 0.001,
-  warmupSteps: 200,
-  totalSteps: 20000,
-  regularizationStrength: 1e-4,
-};
-```
-
-#### ⚡ Real-Time Preset
-
-```typescript
-const realTimeConfig = {
-  numBlocks: 2,
-  embeddingDim: 32,
-  numHeads: 4,
-  ffnMultiplier: 2,
-  temporalScales: [1, 2],
-  temporalKernelSize: 3,
-  maxSequenceLength: 64,
-  learningRate: 0.002,
-  warmupSteps: 50,
-  totalSteps: 5000,
-};
-```
-
-#### 🔬 Research Preset
-
-```typescript
-const researchConfig = {
-  numBlocks: 6,
-  embeddingDim: 256,
-  numHeads: 16,
-  ffnMultiplier: 4,
-  temporalScales: [1, 2, 4, 8, 16],
-  temporalKernelSize: 7,
-  maxSequenceLength: 512,
-  learningRate: 0.0005,
-  warmupSteps: 500,
-  totalSteps: 100000,
-  regularizationStrength: 1e-5,
-};
-```
-
----
-
-## 💡 Examples
-
-### 📈 Stock Price Prediction
-
-```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
-
-// Model optimized for financial data
-const stockModel = new FusionTemporalTransformerRegression({
+const DEFAULT_CONFIG = {
+  // Architecture
   numBlocks: 3,
   embeddingDim: 64,
   numHeads: 8,
-  temporalScales: [1, 5, 20], // Daily, weekly, monthly patterns
-  maxSequenceLength: 252, // One trading year
-  outlierThreshold: 2.5, // Financial data has outliers
-  adwinDelta: 0.005, // Detect market regime changes
+  ffnMultiplier: 4,
+
+  // Temporal
+  temporalScales: [1, 2, 4],
+  temporalKernelSize: 3,
+  maxSequenceLength: 512,
+
+  // Regularization
+  attentionDropout: 0.0,
+  fusionDropout: 0.0,
+  regularizationStrength: 1e-4,
+
+  // Optimization
+  learningRate: 0.001,
+  warmupSteps: 100,
+  totalSteps: 10000,
+  beta1: 0.9,
+  beta2: 0.999,
+  epsilon: 1e-8,
+
+  // Training Control
+  convergenceThreshold: 1e-6,
+  outlierThreshold: 3.0,
+  adwinDelta: 0.002,
+};
+```
+
+---
+
+## 📚 API Reference
+
+### Constructor
+
+```typescript
+constructor(config?: Partial<Config>)
+```
+
+Creates a new model instance. Configuration is lazily applied - actual
+initialization occurs on first `fitOnline()` call.
+
+**Example:**
+
+```typescript
+// Default configuration
+const model1 = new ConvolutionalRegression();
+
+// Custom configuration
+const model2 = new ConvolutionalRegression({
+  numBlocks: 4,
+  embeddingDim: 128,
+});
+```
+
+---
+
+### fitOnline()
+
+```typescript
+fitOnline(data: { 
+  xCoordinates: number[][]; 
+  yCoordinates: number[][] 
+}): FitResult
+```
+
+Trains the model on a single sample using online learning.
+
+**Parameters:**
+
+| Parameter      | Type         | Description                                                          |
+| -------------- | ------------ | -------------------------------------------------------------------- |
+| `xCoordinates` | `number[][]` | Input sequence `[seqLen][inputDim]`                                  |
+| `yCoordinates` | `number[][]` | Output sequence `[seqLen][outputDim]` (uses last timestep as target) |
+
+**Returns: `FitResult`**
+
+```typescript
+interface FitResult {
+  loss: number; // Total loss (MSE + L2 regularization)
+  gradientNorm: number; // L2 norm of all gradients
+  effectiveLearningRate: number; // Current LR after warmup/decay
+  isOutlier: boolean; // Was this sample detected as outlier?
+  converged: boolean; // Has gradient norm reached threshold?
+  sampleIndex: number; // Total samples processed
+  driftDetected: boolean; // Was concept drift detected?
+}
+```
+
+**Example:**
+
+```typescript
+const result = model.fitOnline({
+  xCoordinates: [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+  yCoordinates: [[10], [20], [30]],
 });
 
-// Historical data: [open, high, low, close, volume]
-const historicalData = [
-  [150.0, 152.5, 149.0, 151.5, 1000000],
-  [151.5, 153.0, 150.5, 152.0, 1100000],
-  // ... more historical data
-];
-
-// Target: next day's closing price
-const targets = [
-  [151.5],
-  [152.0],
-  [153.5], // ...
-];
-
-// Train on streaming data
-for (let i = 20; i < historicalData.length; i++) {
-  const window = historicalData.slice(i - 20, i);
-  const target = [targets[i]];
-
-  const result = model.fitOnline({
-    xCoordinates: window,
-    yCoordinates: target,
-  });
-
-  if (result.driftDetected) {
-    console.log(`⚠️ Market regime change detected at index ${i}`);
-  }
+if (result.driftDetected) {
+  console.log("⚠️ Concept drift detected! Model adapting...");
 }
 
-// Predict next 5 trading days
-const forecast = model.predict(5);
-forecast.predictions.forEach((pred, day) => {
+if (result.converged) {
+  console.log("✅ Model has converged!");
+}
+```
+
+---
+
+### predict()
+
+```typescript
+predict(futureSteps: number): PredictionResult
+```
+
+Generates predictions for future timesteps with uncertainty estimates.
+
+**Parameters:**
+
+| Parameter     | Type     | Description                       |
+| ------------- | -------- | --------------------------------- |
+| `futureSteps` | `number` | Number of future steps to predict |
+
+**Returns: `PredictionResult`**
+
+```typescript
+interface PredictionResult {
+  predictions: SinglePrediction[]; // Array of predictions
+  accuracy: number; // Model accuracy estimate (0-1)
+  sampleCount: number; // Training samples processed
+  isModelReady: boolean; // Is model ready for prediction?
+}
+
+interface SinglePrediction {
+  predicted: number[]; // Point predictions [outputDim]
+  lowerBound: number[]; // 95% CI lower bound [outputDim]
+  upperBound: number[]; // 95% CI upper bound [outputDim]
+  standardError: number[]; // Standard error [outputDim]
+}
+```
+
+**Example:**
+
+```typescript
+const result = model.predict(10);
+
+if (!result.isModelReady) {
+  console.log("⏳ Model needs more training data");
+  return;
+}
+
+console.log(`📊 Model Accuracy: ${(result.accuracy * 100).toFixed(1)}%`);
+
+result.predictions.forEach((pred, step) => {
   console.log(
-    `Day ${day + 1}: $${pred.predicted[0].toFixed(2)} ± $${
+    `Step ${step + 1}: ${pred.predicted[0].toFixed(2)} ± ${
       pred.standardError[0].toFixed(2)
     }`,
   );
 });
 ```
 
-### 🌡️ Multi-Sensor IoT Monitoring
+---
+
+### getModelSummary()
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
+getModelSummary(): ModelSummary
+```
 
-// Model for IoT sensor fusion
-const iotModel = new FusionTemporalTransformerRegression({
-  numBlocks: 2, // Lightweight for edge deployment
-  embeddingDim: 32,
-  numHeads: 4,
-  temporalScales: [1, 4, 16], // Different sensor update rates
-  maxSequenceLength: 64,
-  learningRate: 0.002,
-  outlierThreshold: 3.0, // Handle sensor glitches
-});
+Returns comprehensive model statistics and configuration.
 
-// Sensor readings: [temperature, humidity, pressure, light]
-const sensorBuffer: number[][] = [];
+**Returns: `ModelSummary`**
 
-// Simulated real-time data ingestion
-async function processSensorData(reading: number[]) {
-  sensorBuffer.push(reading);
-
-  // Keep sliding window
-  if (sensorBuffer.length > 64) {
-    sensorBuffer.shift();
-  }
-
-  // Need minimum data to train
-  if (sensorBuffer.length < 10) return;
-
-  // Target: predict temperature
-  const target = [[reading[0]]];
-
-  const result = iotModel.fitOnline({
-    xCoordinates: sensorBuffer,
-    yCoordinates: target,
-  });
-
-  // Alert on anomalies
-  if (result.isOutlier) {
-    console.log(`🚨 Anomaly detected! Sensor reading: ${reading}`);
-  }
-
-  // Predict next reading
-  const prediction = iotModel.predict(1);
-  if (prediction.isModelReady) {
-    console.log(
-      `📊 Predicted temperature: ${
-        prediction.predictions[0].predicted[0].toFixed(1)
-      }°C`,
-    );
-  }
+```typescript
+interface ModelSummary {
+  isInitialized: boolean; // Has model been initialized?
+  inputDimension: number; // Input feature dimension
+  outputDimension: number; // Output dimension
+  numBlocks: number; // Number of transformer blocks
+  embeddingDim: number; // Embedding dimension
+  numHeads: number; // Attention heads
+  temporalScales: number[]; // Temporal convolution scales
+  totalParameters: number; // Total trainable parameters
+  sampleCount: number; // Training samples processed
+  accuracy: number; // Current accuracy estimate
+  converged: boolean; // Has model converged?
+  effectiveLearningRate: number; // Current learning rate
+  driftCount: number; // Number of drift events detected
 }
 ```
 
-### 📉 Time Series Forecasting with Uncertainty
+**Example:**
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
+const summary = model.getModelSummary();
 
-const forecastModel = new FusionTemporalTransformerRegression({
-  numBlocks: 3,
-  embeddingDim: 64,
-  numHeads: 8,
-  temporalScales: [1, 7, 28], // Daily, weekly, monthly
-  maxSequenceLength: 180, // 6 months of daily data
-});
-
-// Training loop
-const trainingData = generateSyntheticData(1000);
-
-for (const sample of trainingData) {
-  const result = forecastModel.fitOnline(sample);
-
-  if (result.sampleIndex % 100 === 0) {
-    console.log(`
-📊 Training Progress
-────────────────────
-Sample: ${result.sampleIndex}
-Loss: ${result.loss.toFixed(6)}
-Learning Rate: ${result.effectiveLearningRate.toFixed(6)}
-Gradient Norm: ${result.gradientNorm.toFixed(6)}
-Converged: ${result.converged}
-    `);
-  }
-}
-
-// Generate forecast with confidence intervals
-const horizon = 14; // 2 weeks
-const forecast = forecastModel.predict(horizon);
-
-console.log("\n🔮 14-Day Forecast with 95% Confidence Intervals\n");
-console.log("Day  │ Prediction │    95% CI     │ Std Error");
-console.log("─────┼────────────┼───────────────┼──────────");
-
-forecast.predictions.forEach((pred, i) => {
-  const day = (i + 1).toString().padStart(2);
-  const prediction = pred.predicted[0].toFixed(2).padStart(8);
-  const lower = pred.lowerBound[0].toFixed(2);
-  const upper = pred.upperBound[0].toFixed(2);
-  const ci = `[${lower}, ${upper}]`.padStart(13);
-  const se = pred.standardError[0].toFixed(3).padStart(7);
-
-  console.log(`  ${day} │  ${prediction} │ ${ci} │  ${se}`);
-});
+console.log(`
+╔════════════════════════════════════════╗
+║           MODEL SUMMARY                ║
+╠════════════════════════════════════════╣
+║ Architecture                           ║
+║   • Input Dim:     ${
+  summary.inputDimension.toString().padStart(5)
+}              ║
+║   • Output Dim:    ${
+  summary.outputDimension.toString().padStart(5)
+}              ║
+║   • Blocks:        ${summary.numBlocks.toString().padStart(5)}              ║
+║   • Embedding:     ${
+  summary.embeddingDim.toString().padStart(5)
+}              ║
+║   • Heads:         ${summary.numHeads.toString().padStart(5)}              ║
+║   • Parameters:    ${
+  summary.totalParameters.toLocaleString().padStart(10)
+}       ║
+╠════════════════════════════════════════╣
+║ Training Status                        ║
+║   • Samples:       ${
+  summary.sampleCount.toLocaleString().padStart(10)
+}       ║
+║   • Accuracy:      ${
+  (summary.accuracy * 100).toFixed(1).padStart(5)
+}%            ║
+║   • Converged:     ${summary.converged ? "   ✅" : "   ❌"}              ║
+║   • Drift Events:  ${summary.driftCount.toString().padStart(5)}              ║
+╚════════════════════════════════════════╝
+`);
 ```
 
-### 💾 Model Persistence
+---
+
+### getWeights()
 
 ```typescript
-import { FusionTemporalTransformerRegression } from "jsr:@hviana/multivariate-ft-transformer-regression";
+getWeights(): WeightInfo
+```
 
-// Train model
-const model = new FusionTemporalTransformerRegression();
+Returns all model weights for inspection or custom processing.
 
-// ... training code ...
+---
 
+### getNormalizationStats()
+
+```typescript
+getNormalizationStats(): NormalizationStats
+```
+
+Returns the running normalization statistics.
+
+```typescript
+interface NormalizationStats {
+  inputMean: number[]; // Running mean for each input feature
+  inputStd: number[]; // Running std for each input feature
+  outputMean: number[]; // Running mean for each output
+  outputStd: number[]; // Running std for each output
+  count: number; // Number of samples in statistics
+}
+```
+
+---
+
+### reset()
+
+```typescript
+reset(): void
+```
+
+Resets all model weights and statistics while preserving configuration.
+
+**Example:**
+
+```typescript
+// Reset after detecting major drift
+if (driftCount > 10) {
+  console.log("🔄 Major drift detected, resetting model...");
+  model.reset();
+}
+```
+
+---
+
+### save() / load()
+
+```typescript
+save(): string
+load(state: string): void
+```
+
+Serialize/deserialize complete model state.
+
+**Example:**
+
+```typescript
 // Save model
-const modelJson = model.save();
-await Deno.writeTextFile("model_checkpoint.json", modelJson);
+const modelState = model.save();
+localStorage.setItem("model", modelState);
 
-console.log("✅ Model saved successfully");
-
-// Later: Load model
-const loadedJson = await Deno.readTextFile("model_checkpoint.json");
-const restoredModel = new FusionTemporalTransformerRegression();
-restoredModel.load(loadedJson);
-
-console.log("✅ Model restored successfully");
-
-// Verify restoration
-const summary = restoredModel.getModelSummary();
-console.log(`📊 Restored model has ${summary.totalParameters} parameters`);
-console.log(`📈 Training samples: ${summary.sampleCount}`);
-```
-
----
-
-## 🎯 Best Practices
-
-### 1️⃣ Data Preparation
-
-```typescript
-// ✅ DO: Provide sufficient sequence length
-const goodData = {
-  xCoordinates: generateSequence(50), // At least 10+ timesteps
-  yCoordinates: generateTargets(50),
-};
-
-// ❌ DON'T: Use very short sequences
-const badData = {
-  xCoordinates: [[1, 2], [3, 4]], // Only 2 timesteps
-  yCoordinates: [[5]],
-};
-```
-
-### 2️⃣ Incremental Training
-
-```typescript
-// ✅ DO: Train on streaming data incrementally
-for (const sample of dataStream) {
-  model.fitOnline(sample);
-}
-
-// ✅ DO: Monitor training metrics
-const result = model.fitOnline(sample);
-if (result.driftDetected) {
-  logDriftEvent(result);
-}
-```
-
-### 3️⃣ Memory Management
-
-```typescript
-// ✅ DO: Use appropriate maxSequenceLength
-const efficientModel = new FusionTemporalTransformerRegression({
-  maxSequenceLength: Math.min(yourDataLength, 256),
-});
-
-// ❌ DON'T: Set unnecessarily large maxSequenceLength
-const wastefulModel = new FusionTemporalTransformerRegression({
-  maxSequenceLength: 10000, // Excessive for most use cases
-});
-```
-
-### 4️⃣ Hyperparameter Selection
-
-```typescript
-// Start with defaults, then tune based on metrics
-let bestConfig = { ...defaultConfig };
-let bestLoss = Infinity;
-
-for (const config of configCandidates) {
-  const model = new FusionTemporalTransformerRegression(config);
-  const avgLoss = trainAndEvaluate(model, validationData);
-
-  if (avgLoss < bestLoss) {
-    bestLoss = avgLoss;
-    bestConfig = config;
-  }
+// Load model
+const savedState = localStorage.getItem("model");
+if (savedState) {
+  model.load(savedState);
 }
 ```
 
 ---
 
-## 🔧 Troubleshooting
+## 🧠 Core Concepts
 
-### Common Issues
+### 1️⃣ Online Learning
 
-<details>
-<summary><b>❌ Error: embeddingDim must be divisible by numHeads</b></summary>
+Unlike traditional batch training, this model learns incrementally from each
+sample:
 
-**Problem:** Invalid configuration where `embeddingDim % numHeads !== 0`
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ONLINE LEARNING FLOW                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Sample 1 ──► Train ──► Update Weights ──► Ready           │
+│                                    │                         │
+│   Sample 2 ──► Train ──► Update Weights ──► Better          │
+│                                    │                         │
+│   Sample 3 ──► Train ──► Update Weights ──► Even Better     │
+│                                    │                         │
+│   Sample N ──► Train ──► Update Weights ──► Converged!      │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
-**Solution:**
+**Benefits:**
+
+- 💾 Memory efficient - no need to store entire dataset
+- 🔄 Adapts to changing data distributions
+- ⚡ Can start predicting immediately
+- 📱 Suitable for edge devices
+
+---
+
+### 2️⃣ Multi-Scale Temporal Processing
+
+The model processes input at multiple time scales simultaneously:
+
+```
+                      Input Sequence
+                [t1, t2, t3, t4, t5, t6, t7, t8]
+                             │
+      ┌──────────────────────┼──────────────────────┐
+      │                      │                      │
+      ▼                      ▼                      ▼
+┌───────────┐          ┌───────────┐          ┌───────────┐
+│ Scale = 1 │          │ Scale = 2 │          │ Scale = 4 │
+│ Full res  │          │ Half res  │          │ Quarter   │
+└───────────┘          └───────────┘          └───────────┘
+      │                      │                      │
+      ▼                      ▼                      ▼
+[8 timesteps]          [4 timesteps]          [2 timesteps]
+      │                      │                      │
+      └──────────────────────┼──────────────────────┘
+                             │
+                       Fusion Gate
+                (learns optimal combination)
+```
+
+**Benefits:**
+
+- 🔍 Captures short-term patterns (high-frequency)
+- 📊 Captures long-term trends (low-frequency)
+- 🎯 Adaptive weighting through fusion gate
+
+---
+
+### 3️⃣ Attention Mechanism
+
+The transformer uses causal (masked) multi-head self-attention:
+
+```
+Query (Q)    Key (K)    Value (V)
+   │            │           │
+   └──────┬─────┘           │
+          ▼                 │
+    ┌───────────┐           │
+    │  Q × K^T  │           │
+    │  ───────  │           │
+    │   √d_k    │           │
+    └─────┬─────┘           │
+          │                 │
+          ▼                 │
+    ┌───────────┐           │
+    │  Softmax  │           │
+    │  (causal) │           │
+    └─────┬─────┘           │
+          │                 │
+          └────────┬────────┘
+                   ▼
+             ┌───────────┐
+             │ Attention │
+             │  × V      │
+             └───────────┘
+```
+
+**Causal Mask Example (seq_len=4):**
+
+```
+     t1   t2   t3   t4
+t1 [ ✓    ✗    ✗    ✗  ]   ← t1 only sees itself
+t2 [ ✓    ✓    ✗    ✗  ]   ← t2 sees t1, t2
+t3 [ ✓    ✓    ✓    ✗  ]   ← t3 sees t1, t2, t3
+t4 [ ✓    ✓    ✓    ✓  ]   ← t4 sees all
+```
+
+---
+
+### 4️⃣ Welford's Online Normalization
+
+Instead of requiring the full dataset for normalization, we use Welford's
+algorithm:
 
 ```typescript
-// ❌ Wrong
-const model = new FusionTemporalTransformerRegression({
-  embeddingDim: 50,
-  numHeads: 8, // 50 % 8 = 2 ≠ 0
+// Standard approach (needs all data first):
+mean = sum(x) / n
+std = sqrt(sum((x - mean)²) / n)
+
+// Welford's approach (updates incrementally):
+// For each new sample x:
+delta = x - mean
+mean = mean + delta / n
+M2 = M2 + delta × (x - mean)
+std = sqrt(M2 / n)
+```
+
+**Update visualization:**
+
+```
+Sample 1: mean=10,    std=0
+                 ↓
+Sample 2: mean=15,    std=5
+                 ↓
+Sample 3: mean=13.3,  std=4.7
+                 ↓
+Sample N: mean→μ,     std→σ  (converges to true values)
+```
+
+---
+
+### 5️⃣ ADWIN Drift Detection
+
+**A**daptive **WIN**dowing algorithm detects when data distribution changes:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ADWIN DRIFT DETECTION                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Sliding Window of Losses:                                  │
+│                                                              │
+│   [0.5, 0.4, 0.3, 0.3, 0.2, │ 0.8, 0.9, 1.0, 1.1, 1.2]     │
+│            ↑                        ↑                        │
+│       Window 1                 Window 2                      │
+│       (mean: 0.34)            (mean: 1.0)                    │
+│                                                              │
+│   Statistical test: |0.34 - 1.0| > ε ?                      │
+│   If yes → DRIFT DETECTED! 🔔                               │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 6️⃣ Learning Rate Schedule
+
+The optimizer uses warmup followed by cosine decay:
+
+```
+Learning
+  Rate
+    │
+  lr│            ╭─────╮
+    │          ╱         ╲
+    │        ╱             ╲
+    │      ╱                 ╲
+    │    ╱                     ╲
+    │  ╱  Warmup    Cosine      ╲
+    │╱                  Decay     ╲
+    └────────────────────────────────► Steps
+    0    warmup         total
+         steps          steps
+```
+
+**Formula:**
+
+```
+if step < warmup:
+    lr = base_lr × (step + 1) / warmup
+else:
+    progress = (step - warmup) / (total - warmup)
+    lr = base_lr × 0.5 × (1 + cos(π × progress))
+```
+
+---
+
+## ⚡ Parameter Optimization Guide
+
+### 📋 Quick Reference Table
+
+| Use Case             | Recommended Settings                                          |
+| -------------------- | ------------------------------------------------------------- |
+| **Fast Prototyping** | `numBlocks: 2`, `embeddingDim: 32`, `learningRate: 0.001`     |
+| **Standard Usage**   | `numBlocks: 3`, `embeddingDim: 64`, `learningRate: 0.001`     |
+| **Complex Patterns** | `numBlocks: 4-6`, `embeddingDim: 128`, `learningRate: 0.0005` |
+| **Noisy Data**       | `outlierThreshold: 2.0`, `regularizationStrength: 1e-3`       |
+| **Streaming Data**   | `adwinDelta: 0.001`, `warmupSteps: 50`                        |
+| **Long Sequences**   | `maxSequenceLength: 1024`, `temporalScales: [1,2,4,8,16]`     |
+
+---
+
+### 🏗️ Architecture Parameters
+
+#### `numBlocks` - Transformer Depth
+
+| Value | Use Case                        | Trade-off                   |
+| ----- | ------------------------------- | --------------------------- |
+| 1-2   | Simple patterns, fast inference | Lower capacity              |
+| 3-4   | **Standard choice**             | Good balance                |
+| 5-8   | Complex temporal dependencies   | Slower, risk of overfitting |
+
+```typescript
+// Simple linear trends
+const simple = new ConvolutionalRegression({ numBlocks: 2 });
+
+// Complex seasonal + trend patterns
+const complex = new ConvolutionalRegression({ numBlocks: 5 });
+```
+
+#### `embeddingDim` - Model Capacity
+
+| Value | Use Case                   | Memory |
+| ----- | -------------------------- | ------ |
+| 32    | Low-dimensional data, fast | ~50KB  |
+| 64    | **Standard choice**        | ~200KB |
+| 128   | High-dimensional, complex  | ~800KB |
+| 256+  | Very complex patterns      | 3MB+   |
+
+> ⚠️ **Must be divisible by `numHeads`**
+
+```typescript
+// Memory-constrained environment
+const lightweight = new ConvolutionalRegression({
+  embeddingDim: 32,
+  numHeads: 4, // 32/4 = 8 per head ✓
 });
 
-// ✅ Correct
-const model = new FusionTemporalTransformerRegression({
-  embeddingDim: 64, // 64 % 8 = 0 ✓
-  numHeads: 8,
+// High-capacity model
+const highCapacity = new ConvolutionalRegression({
+  embeddingDim: 256,
+  numHeads: 8, // 256/8 = 32 per head ✓
 });
 ```
 
-</details>
+#### `numHeads` - Attention Heads
 
-<details>
-<summary><b>⚠️ Model not converging</b></summary>
-
-**Symptoms:** Loss remains high, gradientNorm doesn't decrease
-
-**Solutions:**
-
-1. **Adjust learning rate:**
+| Value | Benefit            | Consideration                |
+| ----- | ------------------ | ---------------------------- |
+| 4     | Faster computation | Less pattern diversity       |
+| 8     | **Good balance**   | Standard choice              |
+| 16    | More pattern types | Requires larger embeddingDim |
 
 ```typescript
-const model = new FusionTemporalTransformerRegression({
-  learningRate: 0.0005, // Try lower
-  warmupSteps: 200, // Longer warmup
+// Each head captures different patterns:
+// Head 1: Short-term momentum
+// Head 2: Long-term trends
+// Head 3: Periodic patterns
+// Head 4: Outlier detection
+// etc.
+```
+
+#### `ffnMultiplier` - FFN Hidden Size
+
+| Value | FFN Size (if emb=64) | Use Case      |
+| ----- | -------------------- | ------------- |
+| 2     | 128                  | Lightweight   |
+| 4     | 256                  | **Standard**  |
+| 8     | 512                  | High capacity |
+
+---
+
+### ⏱️ Temporal Parameters
+
+#### `temporalScales` - Multi-Scale Analysis
+
+```typescript
+// Short-term prediction (minutes/hours)
+const shortTerm = new ConvolutionalRegression({
+  temporalScales: [1, 2, 3], // Fine-grained
+});
+
+// Medium-term (hours/days)
+const mediumTerm = new ConvolutionalRegression({
+  temporalScales: [1, 2, 4, 8], // Mixed
+});
+
+// Long-term (days/weeks)
+const longTerm = new ConvolutionalRegression({
+  temporalScales: [1, 4, 16, 64], // Coarse-grained
+});
+
+// Multi-resolution (all patterns)
+const multiRes = new ConvolutionalRegression({
+  temporalScales: [1, 2, 4, 8, 16, 32],
 });
 ```
 
-2. **Add more regularization:**
+**Visualization:**
+
+```
+Input: [────────────────────────────────]
+         32 timesteps
+
+Scale 1: [································]  32 points (all details)
+Scale 2: [················]                  16 points (smoothed)
+Scale 4: [········]                           8 points (trends)
+Scale 8: [····]                               4 points (major patterns)
+```
+
+#### `temporalKernelSize` - Convolution Window
+
+| Value | Receptive Field | Best For               |
+| ----- | --------------- | ---------------------- |
+| 3     | Small           | Point-to-point changes |
+| 5     | Medium          | **General purpose**    |
+| 7+    | Large           | Smooth patterns        |
 
 ```typescript
-const model = new FusionTemporalTransformerRegression({
+// Sharp transitions (e.g., events)
+const sharp = new ConvolutionalRegression({ temporalKernelSize: 3 });
+
+// Smooth trends (e.g., weather)
+const smooth = new ConvolutionalRegression({ temporalKernelSize: 7 });
+```
+
+---
+
+### ⚡ Optimization Parameters
+
+#### `learningRate` - Training Speed
+
+| Value  | Stability | Convergence             |
+| ------ | --------- | ----------------------- |
+| 0.01   | Low       | Very fast (may diverge) |
+| 0.001  | **Good**  | **Standard**            |
+| 0.0001 | High      | Slow (fine-tuning)      |
+
+```typescript
+// Initial training
+const initial = new ConvolutionalRegression({ learningRate: 0.001 });
+
+// Fine-tuning after drift
+const fineTune = new ConvolutionalRegression({ learningRate: 0.0001 });
+```
+
+#### `warmupSteps` + `totalSteps` - LR Schedule
+
+```typescript
+// Quick adaptation needed
+const quick = new ConvolutionalRegression({
+  warmupSteps: 50,
+  totalSteps: 5000,
+});
+
+// Stable long-term training
+const stable = new ConvolutionalRegression({
+  warmupSteps: 500,
+  totalSteps: 100000,
+});
+
+// Guideline: warmupSteps ≈ 5-10% of totalSteps
+```
+
+---
+
+### 🛡️ Regularization Parameters
+
+#### `regularizationStrength` - L2 Penalty
+
+| Value | Effect            | Use Case                 |
+| ----- | ----------------- | ------------------------ |
+| 0     | No regularization | Clean data, underfitting |
+| 1e-5  | Light             | Large datasets           |
+| 1e-4  | **Standard**      | Most cases               |
+| 1e-3  | Strong            | Small/noisy datasets     |
+| 1e-2  | Very strong       | Extreme overfitting      |
+
+```typescript
+// Lots of clean data
+const clean = new ConvolutionalRegression({
+  regularizationStrength: 1e-5,
+});
+
+// Limited noisy data
+const noisy = new ConvolutionalRegression({
   regularizationStrength: 1e-3,
 });
 ```
 
-3. **Check data normalization** - the model normalizes internally, but extreme
-   values may cause issues
+#### `attentionDropout` + `fusionDropout`
 
-</details>
-
-<details>
-<summary><b>⚠️ Predictions have high uncertainty</b></summary>
-
-**Symptoms:** Wide confidence intervals
-
-**Solutions:**
-
-1. **Train longer:**
+| Value   | Effect                     |
+| ------- | -------------------------- |
+| 0.0     | No dropout (deterministic) |
+| 0.1     | Light regularization       |
+| 0.2-0.3 | Moderate (for overfitting) |
+| 0.5+    | Heavy (rarely needed)      |
 
 ```typescript
-// Check sample count
-const summary = model.getModelSummary();
-if (summary.sampleCount < 1000) {
-  console.log("Continue training for better predictions");
+// Prevent overfitting on small datasets
+const regularized = new ConvolutionalRegression({
+  attentionDropout: 0.1,
+  fusionDropout: 0.05,
+});
+```
+
+---
+
+### 🎯 Training Control Parameters
+
+#### `outlierThreshold` - Outlier Detection
+
+Based on z-score (standard deviations from mean):
+
+| Value | Outlier % (normal dist) | Use Case             |
+| ----- | ----------------------- | -------------------- |
+| 2.0   | 4.55%                   | Aggressive filtering |
+| 2.5   | 1.24%                   | Moderate             |
+| 3.0   | 0.27%                   | **Standard**         |
+| 4.0   | 0.006%                  | Almost none filtered |
+
+```typescript
+// Financial data (many outliers)
+const financial = new ConvolutionalRegression({
+  outlierThreshold: 2.0, // Downweight extreme values
+});
+
+// Sensor data (few outliers)
+const sensor = new ConvolutionalRegression({
+  outlierThreshold: 4.0, // Only extreme outliers
+});
+```
+
+#### `adwinDelta` - Drift Sensitivity
+
+| Value | Sensitivity  | False Positive Rate |
+| ----- | ------------ | ------------------- |
+| 0.001 | Very high    | More false alarms   |
+| 0.002 | **Standard** | Balanced            |
+| 0.01  | Low          | May miss drift      |
+| 0.1   | Very low     | Only major changes  |
+
+```typescript
+// Rapidly changing environment
+const dynamic = new ConvolutionalRegression({
+  adwinDelta: 0.001,
+});
+
+// Stable environment
+const stable = new ConvolutionalRegression({
+  adwinDelta: 0.01,
+});
+```
+
+---
+
+### 💡 Configuration Recipes
+
+#### 🌡️ Weather Prediction
+
+```typescript
+const weatherModel = new ConvolutionalRegression({
+  numBlocks: 3,
+  embeddingDim: 64,
+  numHeads: 8,
+  temporalScales: [1, 6, 24, 168], // hourly, 6h, daily, weekly
+  temporalKernelSize: 5,
+  maxSequenceLength: 720, // 30 days of hourly data
+  learningRate: 0.0005,
+  warmupSteps: 200,
+  outlierThreshold: 3.0, // Weather can be extreme
+  regularizationStrength: 1e-4,
+});
+```
+
+#### 📈 Stock Price Prediction
+
+```typescript
+const stockModel = new ConvolutionalRegression({
+  numBlocks: 4,
+  embeddingDim: 128,
+  numHeads: 8,
+  temporalScales: [1, 2, 5, 20], // tick, minutes, hours, days
+  temporalKernelSize: 3, // Sharp movements
+  maxSequenceLength: 512,
+  learningRate: 0.0001, // Very careful updates
+  warmupSteps: 500,
+  outlierThreshold: 2.5, // Financial outliers common
+  adwinDelta: 0.001, // Markets change fast
+  regularizationStrength: 1e-3,
+  attentionDropout: 0.1,
+});
+```
+
+#### 🏭 Industrial Sensor Monitoring
+
+```typescript
+const sensorModel = new ConvolutionalRegression({
+  numBlocks: 2, // Real-time requirements
+  embeddingDim: 32, // Lightweight
+  numHeads: 4,
+  temporalScales: [1, 5, 30], // seconds, minutes
+  temporalKernelSize: 5,
+  maxSequenceLength: 360, // 1 hour at 10s intervals
+  learningRate: 0.001,
+  warmupSteps: 50,
+  outlierThreshold: 4.0, // Sensors are reliable
+  adwinDelta: 0.002, // Detect equipment degradation
+  regularizationStrength: 1e-5,
+});
+```
+
+#### 🛒 E-commerce Demand Forecasting
+
+```typescript
+const demandModel = new ConvolutionalRegression({
+  numBlocks: 4,
+  embeddingDim: 128,
+  numHeads: 8,
+  temporalScales: [1, 7, 30, 90], // daily, weekly, monthly, quarterly
+  temporalKernelSize: 7, // Smooth demand patterns
+  maxSequenceLength: 365, // 1 year history
+  learningRate: 0.0005,
+  warmupSteps: 100,
+  outlierThreshold: 2.5, // Promotions cause spikes
+  adwinDelta: 0.005, // Seasonal drift expected
+  regularizationStrength: 1e-4,
+});
+```
+
+---
+
+## 📊 Use Cases
+
+### Time Series Forecasting
+
+```typescript
+// Multi-step ahead forecasting
+const model = new ConvolutionalRegression({ numBlocks: 4 });
+
+// Train on historical data
+historicalData.forEach((window) => {
+  model.fitOnline({
+    xCoordinates: window.features, // [seq][features]
+    yCoordinates: window.targets, // [seq][1]
+  });
+});
+
+// Predict next 24 hours
+const forecast = model.predict(24);
+```
+
+### Anomaly Detection
+
+```typescript
+// Train model to predict normal behavior
+const model = new ConvolutionalRegression({
+  outlierThreshold: 2.0, // Lower threshold
+});
+
+// Check if new data is anomalous
+function detectAnomaly(newData) {
+  const result = model.fitOnline(newData);
+  return result.isOutlier; // True if anomalous
 }
 ```
 
-2. **Reduce model complexity:**
+### Streaming Data Analysis
 
 ```typescript
-const simplerModel = new FusionTemporalTransformerRegression({
+// Real-time processing
+const model = new ConvolutionalRegression({
+  adwinDelta: 0.001, // Sensitive to changes
+  warmupSteps: 50, // Quick adaptation
+});
+
+// Process stream
+for await (const data of dataStream) {
+  const result = model.fitOnline(data);
+
+  if (result.driftDetected) {
+    notifyOperators("Distribution change detected!");
+  }
+
+  // Always-fresh predictions
+  const predictions = model.predict(1);
+  displayDashboard(predictions);
+}
+```
+
+---
+
+## 🔬 Mathematical Foundation
+
+### Loss Function
+
+```
+L = L_MSE + λ × L_reg
+
+L_MSE = (1/2n) × Σᵢ (ŷᵢ - yᵢ)²
+
+L_reg = (λ/2) × Σ_w w²
+```
+
+### Adam Optimizer
+
+```
+m_t = β₁ × m_{t-1} + (1 - β₁) × g_t
+v_t = β₂ × v_{t-1} + (1 - β₂) × g_t²
+
+m̂_t = m_t / (1 - β₁^t)
+v̂_t = v_t / (1 - β₂^t)
+
+θ_t = θ_{t-1} - lr × m̂_t / (√v̂_t + ε)
+```
+
+### GELU Activation
+
+```
+GELU(x) = x × Φ(x)
+        ≈ 0.5x × (1 + tanh(√(2/π) × (x + 0.044715x³)))
+```
+
+### Xavier Initialization
+
+```
+W ~ U(-limit, limit)
+limit = √(6 / (fan_in + fan_out))
+```
+
+### Attention
+
+```
+Attention(Q, K, V) = softmax(QK^T / √d_k) × V
+```
+
+---
+
+## 💾 Model Persistence
+
+### Save and Load
+
+```typescript
+// Save model state
+const model = new ConvolutionalRegression();
+// ... train model ...
+
+const state = model.save();
+await Deno.writeTextFile("model.json", state);
+
+// Load model state
+const loaded = await Deno.readTextFile("model.json");
+const restoredModel = new ConvolutionalRegression();
+restoredModel.load(loaded);
+
+// Continue training or predicting
+const predictions = restoredModel.predict(5);
+```
+
+### Checkpointing Strategy
+
+```typescript
+let bestAccuracy = 0;
+let bestModelState = "";
+
+for (const batch of trainingData) {
+  const result = model.fitOnline(batch);
+
+  // Save best model
+  const summary = model.getModelSummary();
+  if (summary.accuracy > bestAccuracy) {
+    bestAccuracy = summary.accuracy;
+    bestModelState = model.save();
+    console.log(
+      `💾 New best model saved (accuracy: ${bestAccuracy.toFixed(4)})`,
+    );
+  }
+
+  // Periodic checkpoint
+  if (result.sampleIndex % 1000 === 0) {
+    await Deno.writeTextFile(
+      `checkpoint_${result.sampleIndex}.json`,
+      model.save(),
+    );
+  }
+}
+
+// Restore best model for deployment
+model.load(bestModelState);
+```
+
+---
+
+## 📈 Performance Tips
+
+### 🚀 Speed Optimization
+
+```typescript
+// 1. Use smaller architecture for real-time
+const fastModel = new ConvolutionalRegression({
   numBlocks: 2,
   embeddingDim: 32,
+  temporalScales: [1, 2],
+});
+
+// 2. Limit sequence length
+const efficient = new ConvolutionalRegression({
+  maxSequenceLength: 128, // Only recent history
+});
+
+// 3. Reduce temporal scales
+const minimal = new ConvolutionalRegression({
+  temporalScales: [1, 4], // Just two scales
 });
 ```
 
-</details>
-
-<details>
-<summary><b>⚠️ Frequent drift detection</b></summary>
-
-**Symptoms:** `driftDetected: true` on many samples
-
-**Solutions:**
-
-1. **Adjust ADWIN sensitivity:**
+### 💾 Memory Optimization
 
 ```typescript
-const model = new FusionTemporalTransformerRegression({
-  adwinDelta: 0.05, // Less sensitive (default: 0.002)
+// Estimate memory usage
+const summary = model.getModelSummary();
+const estimatedMB = (summary.totalParameters * 8 * 3) / 1_000_000;
+// *8 for Float64, *3 for weights + adam_m + adam_v
+console.log(`Estimated memory: ${estimatedMB.toFixed(1)} MB`);
+
+// Low-memory configuration
+const lowMem = new ConvolutionalRegression({
+  embeddingDim: 32,
+  numBlocks: 2,
+  maxSequenceLength: 64,
 });
 ```
 
-2. **Check if data genuinely has distribution shifts** - this may be expected
-   behavior
+### 📊 Accuracy Optimization
 
-</details>
+```typescript
+// High-accuracy configuration
+const accurate = new ConvolutionalRegression({
+  numBlocks: 5,
+  embeddingDim: 128,
+  numHeads: 8,
+  ffnMultiplier: 4,
+  temporalScales: [1, 2, 4, 8, 16],
+  learningRate: 0.0005,
+  warmupSteps: 500,
+  regularizationStrength: 1e-4,
+  attentionDropout: 0.1,
+});
+```
+
+---
+
+## 🔄 Training Loop Best Practices
+
+```typescript
+async function trainModel(model: ConvolutionalRegression, data: DataStream) {
+  let patience = 0;
+  const maxPatience = 100;
+  let bestLoss = Infinity;
+
+  for await (const sample of data) {
+    const result = model.fitOnline(sample);
+
+    // Early stopping
+    if (result.loss < bestLoss) {
+      bestLoss = result.loss;
+      patience = 0;
+    } else {
+      patience++;
+      if (patience >= maxPatience) {
+        console.log("⏹️ Early stopping triggered");
+        break;
+      }
+    }
+
+    // Handle drift
+    if (result.driftDetected) {
+      console.log("🔄 Drift detected, adapting...");
+      // Optionally reset or adjust learning rate
+    }
+
+    // Convergence check
+    if (result.converged) {
+      console.log("✅ Model converged!");
+      break;
+    }
+
+    // Progress logging
+    if (result.sampleIndex % 100 === 0) {
+      console.log(
+        `📊 Step ${result.sampleIndex}: loss=${result.loss.toFixed(6)}, lr=${
+          result.effectiveLearningRate.toFixed(6)
+        }`,
+      );
+    }
+  }
+
+  return model;
+}
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests
+on [GitHub](https://github.com/hviana/multivariate-ft-transformer-regression).
+
+### Development Setup
+
+```bash
+# Clone repository
+git clone https://github.com/hviana/multivariate-ft-transformer-regression.git
+
+# Run tests
+deno test
+
+# Run examples
+deno run --allow-read examples/basic.ts
+```
 
 ---
 
 ## 📄 License
 
-MIT License © 2025 Henrique Emanoel Viana
+MIT License © 2025 [Henrique Emanoel Viana](https://github.com/hviana)
+
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+```
 
 ---
 
 <div align="center">
 
-**[⬆ Back to Top](#-fusion-temporal-transformer-regression)**
+**Made with ❤️ by [Henrique Emanoel Viana](https://github.com/hviana)**
 
-Made with ❤️ by [Henrique Emanoel Viana](https://github.com/hviana)
+⭐ Star this repo if you find it useful!
+
+[Report Bug](https://github.com/hviana/multivariate-ft-transformer-regression/issues)
+•
+[Request Feature](https://github.com/hviana/multivariate-ft-transformer-regression/issues)
 
 </div>
