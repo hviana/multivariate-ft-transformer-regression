@@ -1,4 +1,4 @@
-Model: Implement TypeScript library "FTTransformerRegression": FT-Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
+Implement TypeScript library "FusionTemporalTransformerRegression": Fusion Temporal Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
 
 PERFORMANCE:
 - Minimize memory allocations by reusing arrays and objects wherever possible
@@ -20,7 +20,7 @@ DESIGN:
 - Inline math formula docs; normalize inputs; track running average loss for accuracy
 
 CONFIG (defaults):
-numBlocks: 3, embeddingDim: 64, numHeads: 8, ffnMultiplier: 4, attentionDropout: 0.0, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
+numBlocks: 3, embeddingDim: 64, numHeads: 8, ffnMultiplier: 4, attentionDropout: 0.0, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002, temporalScales: [1, 2, 4], temporalKernelSize: 3, maxSequenceLength: 512, fusionDropout: 0.0
 
 API:
 fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
@@ -33,32 +33,41 @@ TYPES:
 FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected }
 PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
 SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
-WeightInfo { featureEmbeddings, clsToken, attentionWeights, ffnWeights, layerNormParams, outputWeights, firstMoment, secondMoment: number[][][], updateCount }
+WeightInfo { temporalConvWeights, scaleEmbeddings, positionalEncoding, fusionWeights, attentionWeights, ffnWeights, layerNormParams, outputWeights, firstMoment, secondMoment: number[][][], updateCount }
 NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
-ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embeddingDim, numHeads, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
+ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embeddingDim, numHeads, temporalScales, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
 
 ALGORITHMS:
 
-FT-Transformer Architecture:
-1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length
-2. Feature Tokenizer: Each feature xᵢ → eᵢ = xᵢ · Wᵢ + bᵢ ∈ ℝ^embeddingDim (linear embedding per feature)
-3. CLS Token: Prepend learnable [CLS] ∈ ℝ^embeddingDim → sequence [CLS, e₁, ..., eₙ]
-4. Transformer Block × numBlocks: LayerNorm → Multi-Head Self-Attention → Residual → LayerNorm → FFN → Residual
-5. Output: Dense([CLS]_final) → ŷ ∈ ℝ^outputDim
+Fusion Temporal Transformer Architecture:
+1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length, seqLen = xCoordinates.length
+2. Temporal Positional Encoding: PE(pos,2i) = sin(pos/10000^(2i/d)), PE(pos,2i+1) = cos(pos/10000^(2i/d))
+3. Multi-Scale Temporal Convolution: For each scale s ∈ temporalScales: Fₛ = GELU(Conv1D(X, kernel=temporalKernelSize, stride=s)) ∈ ℝ^(seqLen/s × embeddingDim)
+4. Scale-Specific Embedding: Eₛ = Fₛ + PEₛ + ScaleEmb(s), learnable scale embedding per temporal resolution
+5. Cross-Scale Fusion: Fuse representations across scales via gated attention fusion: G = σ(Concat(E₁,...,Eₛ)Wg), Fused = Σ(Gₛ ⊙ Eₛ)
+6. Transformer Block × numBlocks: LayerNorm → Temporal Multi-Head Self-Attention → Residual → LayerNorm → FFN → Residual
+7. Temporal Aggregation: Pool across sequence dimension via attention-weighted mean: α = softmax(HWpool), out = Σαᵢhᵢ
+8. Output: Dense(out) → ŷ ∈ ℝ^outputDim
 
-Multi-Head Self-Attention:
+Temporal Multi-Head Self-Attention:
 1. Project: Qₕ = XWᵠₕ, Kₕ = XWᵏₕ, Vₕ = XWᵛₕ, dₖ = embeddingDim/numHeads
-2. Scores: Aₕ = softmax(QₕKₕᵀ / √dₖ)Vₕ
-3. Output: MultiHead = Concat(A₁,...,Aₕ)Wᵒ + b
+2. Temporal Mask: Apply causal or sliding window mask for temporal locality
+3. Scores: Aₕ = softmax(QₕKₕᵀ / √dₖ + TemporalBias)Vₕ
+4. Output: MultiHead = Concat(A₁,...,Aₕ)Wᵒ + b
+
+Cross-Scale Attention Fusion:
+1. Query from finest scale: Q = E₁Wᵠ
+2. Keys/Values from all scales: K = Concat(E₁,...,Eₛ)Wᵏ, V = Concat(E₁,...,Eₛ)Wᵛ
+3. Fused = softmax(QKᵀ/√d)V, captures cross-temporal dependencies
 
 Feed-Forward Network:
 FFN(x) = GELU(xW₁ + b₁)W₂ + b₂, hidden_dim = embeddingDim × ffnMultiplier
 
 Adam + Cosine Warmup:
 1. Normalize: x̃ = (x - μ)/(σ + ε)
-2. Forward: propagate through transformer blocks, cache activations for backprop
+2. Forward: propagate through temporal conv, fusion, transformer blocks, cache activations for backprop
 3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
-4. Backprop: ∂L/∂W via chain rule through attention and FFN layers
+4. Backprop: ∂L/∂W via chain rule through attention, fusion, and temporal conv layers
 5. LR: warmup → cosine decay
 6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
 
@@ -70,4 +79,4 @@ ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(
 
 Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
 
-Export: FTTransformerRegression
+Export: FusionTemporalTransformerRegression
