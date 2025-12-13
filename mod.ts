@@ -1740,6 +1740,7 @@ export class FusionTemporalTransformerRegression
     skipParamInit = false,
   ): void {
     this._isInitialized = true;
+    const D = this._cfg.embeddingDim | 0;
     const Hhid = (D * (this._cfg.ffnMultiplier | 0)) | 0;
     this._scratchFFN = new Float64Array(
       (this._cfg.maxSequenceLength | 0) * Hhid,
@@ -1747,7 +1748,6 @@ export class FusionTemporalTransformerRegression
     this._inDim = inDim | 0;
     this._outDim = outDim | 0;
 
-    const D = this._cfg.embeddingDim | 0;
     const numBlocks = this._cfg.numBlocks | 0;
     const S = this._cfg.temporalScales.length | 0;
     const K = this._cfg.temporalKernelSize | 0;
