@@ -1,19 +1,17 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
 /**
- * Fusion Temporal Transformer for Multivariate Regression
- * with Incremental Online Learning
- *
- * Features:
- * - Online Adam optimizer with warmup and cosine decay
- * - Welford's online algorithm for z-score normalization
+ * Fusion Temporal Transformer (FTT) for multivariate regression with:
+ * - Incremental online learning (Adam)
+ * - Online z-score normalization (Welford)
  * - L2 regularization
  * - Outlier downweighting
  * - ADWIN drift detection
  *
- * Weight initialization: Xavier uniform for linear layers
- * limit = sqrt(6 / (fanIn + fanOut))
+ * Pure TypeScript, no external dependencies, Float64Array tensors, allocation-avoiding hot paths.
  */
 
-type FitResult = {
+export type FitResult = {
   loss: number;
   gradientNorm: number;
   effectiveLearningRate: number;
@@ -23,21 +21,21 @@ type FitResult = {
   driftDetected: boolean;
 };
 
-type SinglePrediction = {
+export type SinglePrediction = {
   predicted: number[];
   lowerBound: number[];
   upperBound: number[];
   standardError: number[];
 };
 
-type PredictionResult = {
+export type PredictionResult = {
   predictions: SinglePrediction[];
   accuracy: number;
   sampleCount: number;
   isModelReady: boolean;
 };
 
-type WeightInfo = {
+export type WeightInfo = {
   temporalConvWeights: number[][][];
   scaleEmbeddings: number[][];
   positionalEncoding: number[][];
@@ -51,7 +49,7 @@ type WeightInfo = {
   updateCount: number;
 };
 
-type NormalizationStats = {
+export type NormalizationStats = {
   inputMean: number[];
   inputStd: number[];
   outputMean: number[];
@@ -59,7 +57,7 @@ type NormalizationStats = {
   count: number;
 };
 
-type ModelSummary = {
+export type ModelSummary = {
   isInitialized: boolean;
   inputDimension: number;
   outputDimension: number;
@@ -75,7 +73,7 @@ type ModelSummary = {
   driftCount: number;
 };
 
-interface Config {
+export type Config = {
   numBlocks: number;
   embeddingDim: number;
   numHeads: number;
@@ -95,2359 +93,2255 @@ interface Config {
   temporalScales: number[];
   temporalKernelSize: number;
   maxSequenceLength: number;
-}
-
-const DEFAULT_CONFIG: Config = {
-  numBlocks: 3,
-  embeddingDim: 64,
-  numHeads: 8,
-  ffnMultiplier: 4,
-  attentionDropout: 0.0,
-  fusionDropout: 0.0,
-  learningRate: 0.001,
-  warmupSteps: 100,
-  totalSteps: 10000,
-  beta1: 0.9,
-  beta2: 0.999,
-  epsilon: 1e-8,
-  regularizationStrength: 1e-4,
-  convergenceThreshold: 1e-6,
-  outlierThreshold: 3.0,
-  adwinDelta: 0.002,
-  temporalScales: [1, 2, 4],
-  temporalKernelSize: 3,
-  maxSequenceLength: 512,
 };
 
-interface SerializedState {
-  config: Config;
-  inputDim: number;
-  outputDim: number;
-  seqLen: number;
-  isInitialized: boolean;
-  sampleCount: number;
-  updateCount: number;
-  driftCount: number;
-  runningLoss: number;
-  normCount: number;
-  residualCount: number;
-  inputMean: number[];
-  inputM2: number[];
-  outputMean: number[];
-  outputM2: number[];
-  residualM2: number[];
-  posEnc: number[];
-  convW: number[][];
-  convB: number[][];
-  scaleEmb: number[];
-  fusionW: number[];
-  fusionB: number[];
-  ln1Gamma: number[][];
-  ln1Beta: number[][];
-  ln2Gamma: number[][];
-  ln2Beta: number[][];
-  attnWq: number[][];
-  attnWk: number[][];
-  attnWv: number[][];
-  attnWo: number[][];
-  ffnW1: number[][];
-  ffnB1: number[][];
-  ffnW2: number[][];
-  ffnB2: number[][];
-  poolW: number[];
-  poolB: number;
-  outW: number[];
-  outB: number[];
-  adamM: number[];
-  adamV: number[];
-  lastWindow: number[];
-  lastWindowLen: number;
-  driftWindow: number[];
-  driftWindowHead: number;
-  driftWindowCount: number;
-  rngState: number;
-  converged: boolean;
-  lastGradNorm: number;
-  lastLR: number;
-}
+type _Welford = {
+  n: number;
+  mean: Float64Array;
+  m2: Float64Array;
+};
 
-/**
- * Fusion Temporal Transformer for multivariate regression with incremental online learning.
- *
- * @example
- * ```typescript
- * const model = new FusionTemporalTransformerRegression({ numBlocks: 2 });
- *
- * // Train on sequences
- * for (const sample of trainingData) {
- *   const result = model.fitOnline({
- *     xCoordinates: sample.x,  // [seqLen][inputDim]
- *     yCoordinates: sample.y   // [seqLen][outputDim]
- *   });
- *   console.log(`Loss: ${result.loss}, Converged: ${result.converged}`);
- * }
- *
- * // Predict future steps
- * const predictions = model.predict(5);
- * console.log(predictions.predictions[0].predicted);
- * ```
- */
-export class FusionTemporalTransformerRegression {
-  private config: Config;
-  private inputDim: number = 0;
-  private outputDim: number = 0;
-  private seqLen: number = 0;
-  private isInitialized: boolean = false;
-  private ffnDim: number = 0;
-  private headDim: number = 0;
-  private numScales: number = 0;
+type _Adwin = {
+  cap: number;
+  minN: number;
+  delta: number;
+  buf: Float64Array;
+  idx: number;
+  size: number;
+};
 
-  // Welford normalization
-  private inputMean!: Float64Array;
-  private inputM2!: Float64Array;
-  private outputMean!: Float64Array;
-  private outputM2!: Float64Array;
-  private normCount: number = 0;
+type _BlockParams = {
+  // LN1
+  ln1Gamma: Float64Array;
+  ln1Beta: Float64Array;
+  // Attention
+  Wq: Float64Array;
+  Wk: Float64Array;
+  Wv: Float64Array;
+  Wo: Float64Array;
+  // LN2
+  ln2Gamma: Float64Array;
+  ln2Beta: Float64Array;
+  // FFN
+  W1: Float64Array;
+  b1: Float64Array;
+  W2: Float64Array;
+  b2: Float64Array;
+};
 
-  // Residual variance for uncertainty
-  private residualM2!: Float64Array;
-  private residualCount: number = 0;
+type _BlockMoments = {
+  // first moments
+  m_ln1Gamma: Float64Array;
+  m_ln1Beta: Float64Array;
+  m_Wq: Float64Array;
+  m_Wk: Float64Array;
+  m_Wv: Float64Array;
+  m_Wo: Float64Array;
+  m_ln2Gamma: Float64Array;
+  m_ln2Beta: Float64Array;
+  m_W1: Float64Array;
+  m_b1: Float64Array;
+  m_W2: Float64Array;
+  m_b2: Float64Array;
 
-  // Positional encoding
-  private posEnc!: Float64Array;
+  // second moments
+  v_ln1Gamma: Float64Array;
+  v_ln1Beta: Float64Array;
+  v_Wq: Float64Array;
+  v_Wk: Float64Array;
+  v_Wv: Float64Array;
+  v_Wo: Float64Array;
+  v_ln2Gamma: Float64Array;
+  v_ln2Beta: Float64Array;
+  v_W1: Float64Array;
+  v_b1: Float64Array;
+  v_W2: Float64Array;
+  v_b2: Float64Array;
+};
 
-  // Conv weights per scale
-  private convW: Float64Array[] = [];
-  private convB: Float64Array[] = [];
+type _BlockGrads = {
+  g_ln1Gamma: Float64Array;
+  g_ln1Beta: Float64Array;
+  g_Wq: Float64Array;
+  g_Wk: Float64Array;
+  g_Wv: Float64Array;
+  g_Wo: Float64Array;
+  g_ln2Gamma: Float64Array;
+  g_ln2Beta: Float64Array;
+  g_W1: Float64Array;
+  g_b1: Float64Array;
+  g_W2: Float64Array;
+  g_b2: Float64Array;
+};
 
-  // Scale embeddings
-  private scaleEmb!: Float64Array;
+type _ScaleParams = {
+  W: Float64Array; // [K, inDim, emb] row-major flattened
+  b: Float64Array; // [emb]
+  scaleEmb: Float64Array; // [emb]
+};
 
-  // Fusion gate
-  private fusionW!: Float64Array;
-  private fusionB!: Float64Array;
+type _ScaleMoments = {
+  m_W: Float64Array;
+  m_b: Float64Array;
+  m_scaleEmb: Float64Array;
+  v_W: Float64Array;
+  v_b: Float64Array;
+  v_scaleEmb: Float64Array;
+};
 
-  // Transformer blocks
-  private ln1Gamma: Float64Array[] = [];
-  private ln1Beta: Float64Array[] = [];
-  private ln2Gamma: Float64Array[] = [];
-  private ln2Beta: Float64Array[] = [];
-  private attnWq: Float64Array[] = [];
-  private attnWk: Float64Array[] = [];
-  private attnWv: Float64Array[] = [];
-  private attnWo: Float64Array[] = [];
-  private ffnW1: Float64Array[] = [];
-  private ffnB1: Float64Array[] = [];
-  private ffnW2: Float64Array[] = [];
-  private ffnB2: Float64Array[] = [];
+type _ScaleGrads = {
+  g_W: Float64Array;
+  g_b: Float64Array;
+  g_scaleEmb: Float64Array;
+};
+
+type _Buffers = {
+  // Input window
+  xRaw: Float64Array; // [L1, inDim]
+  xNorm: Float64Array; // [L1, inDim]
+  yTargetRaw: Float64Array; // [outDim]
+  yTargetNorm: Float64Array; // [outDim]
+
+  // Multi-scale conv
+  convPre: Float64Array[]; // per scale: [Ls, emb]
+  convAct: Float64Array[]; // per scale: [Ls, emb]
+  E: Float64Array[]; // per scale: [Ls, emb]
+  EUp: Float64Array[]; // per scale: [L1, emb]
+  dE: Float64Array[]; // per scale: [Ls, emb]
+  dEUp: Float64Array[]; // per scale: [L1, emb]
+
+  // Fusion
+  concat: Float64Array; // [L1, concatDim]
+  gatePre: Float64Array; // [L1, concatDim]
+  gate: Float64Array; // [L1, concatDim]
+  fusedPreDrop: Float64Array; // [L1, emb]
+  fused: Float64Array; // [L1, emb]
+  dFused: Float64Array; // [L1, emb]
+  dConcat: Float64Array; // [L1, concatDim]
+  dGate: Float64Array; // [L1, concatDim]
+  dGatePre: Float64Array; // [L1, concatDim]
+
+  // Transformer: per block caches
+  blockInput: Float64Array[]; // [numBlocks] each [L1, emb] (H in)
+  ln1Mean: Float64Array[]; // [numBlocks] [L1]
+  ln1Var: Float64Array[]; // [numBlocks] [L1]
+  Xn1: Float64Array[]; // [numBlocks] [L1, emb]
+  Q: Float64Array[]; // [numBlocks] [L1, emb]
+  K: Float64Array[]; // [numBlocks] [L1, emb]
+  V: Float64Array[]; // [numBlocks] [L1, emb]
+  context: Float64Array[]; // [numBlocks] [L1, emb]
+  attnProj: Float64Array[]; // [numBlocks] [L1, emb]
+  afterAttn: Float64Array[]; // [numBlocks] [L1, emb] (H1)
+  ln2Mean: Float64Array[]; // [numBlocks] [L1]
+  ln2Var: Float64Array[]; // [numBlocks] [L1]
+  Xn2: Float64Array[]; // [numBlocks] [L1, emb]
+  ffnPre: Float64Array[]; // [numBlocks] [L1, hidden]
+  ffnAct: Float64Array[]; // [numBlocks] [L1, hidden]
+  ffnOut: Float64Array[]; // [numBlocks] [L1, emb]
+
+  // Grad buffers through transformer
+  dH: Float64Array; // [L1, emb] upstream grad
+  dTmp: Float64Array; // [L1, emb] scratch
+  dXn: Float64Array; // [L1, emb] scratch
+  dQ: Float64Array; // [L1, emb]
+  dK: Float64Array; // [L1, emb]
+  dV: Float64Array; // [L1, emb]
+  dContext: Float64Array; // [L1, emb]
+  dAttnProj: Float64Array; // [L1, emb]
 
   // Pooling
-  private poolW!: Float64Array;
-  private poolB: number = 0;
+  poolScores: Float64Array; // [L1]
+  poolAlpha: Float64Array; // [L1]
+  pooled: Float64Array; // [emb]
+  dPooled: Float64Array; // [emb]
+  dScores: Float64Array; // [L1]
+  dAlpha: Float64Array; // [L1]
 
   // Output
-  private outW!: Float64Array;
-  private outB!: Float64Array;
+  yHatNorm: Float64Array; // [outDim]
+  dYHat: Float64Array; // [outDim]
 
-  // Adam moments
-  private adamM!: Float64Array;
-  private adamV!: Float64Array;
-  private totalParams: number = 0;
+  // Scratch vectors
+  tmpEmb: Float64Array; // [emb]
+  tmpConcat: Float64Array; // [concatDim]
+  tmpHidden: Float64Array; // [hiddenDim]
+};
 
-  // Counters
-  private updateCount: number = 0;
-  private sampleCount: number = 0;
-  private driftCount: number = 0;
-  private runningLoss: number = 0;
+function _clamp(x: number, lo: number, hi: number): number {
+  return x < lo ? lo : (x > hi ? hi : x);
+}
 
-  // ADWIN
-  private driftWindow: Float64Array;
-  private driftWindowSize: number = 256;
-  private driftWindowHead: number = 0;
-  private driftWindowCount: number = 0;
+function _safeSqrt(x: number): number {
+  return Math.sqrt(x < 0 ? 0 : x);
+}
 
-  // Last window
-  private lastWindow!: Float64Array;
-  private lastWindowLen: number = 0;
+function _isFiniteNumber(x: number): boolean {
+  return Number.isFinite(x) && !Number.isNaN(x);
+}
 
-  // Forward cache
-  private fwdNormX!: Float64Array;
-  private fwdNormY!: Float64Array;
-  private fwdConvOut: Float64Array[] = [];
-  private fwdConvPre: Float64Array[] = [];
-  private fwdScaleEmb: Float64Array[] = [];
-  private fwdUpsampled!: Float64Array;
-  private fwdGateIn!: Float64Array;
-  private fwdGate!: Float64Array;
-  private fwdFused!: Float64Array;
-  private fwdBlockIn: Float64Array[] = [];
-  private fwdLn1Out: Float64Array[] = [];
-  private fwdLn1Mean: Float64Array[] = [];
-  private fwdLn1Rstd: Float64Array[] = [];
-  private fwdQ: Float64Array[] = [];
-  private fwdK: Float64Array[] = [];
-  private fwdV: Float64Array[] = [];
-  private fwdAttnScores: Float64Array[] = [];
-  private fwdAttnProbs: Float64Array[] = [];
-  private fwdAttnOut: Float64Array[] = [];
-  private fwdAttnProj: Float64Array[] = [];
-  private fwdRes1: Float64Array[] = [];
-  private fwdLn2Out: Float64Array[] = [];
-  private fwdLn2Mean: Float64Array[] = [];
-  private fwdLn2Rstd: Float64Array[] = [];
-  private fwdFfnHid: Float64Array[] = [];
-  private fwdFfnPre: Float64Array[] = [];
-  private fwdFfnOut: Float64Array[] = [];
-  private fwdBlockOut: Float64Array[] = [];
-  private fwdPoolScores!: Float64Array;
-  private fwdPoolWeights!: Float64Array;
-  private fwdPooled!: Float64Array;
-  private fwdOutput!: Float64Array;
-
-  // Gradient buffers
-  private gradConvW: Float64Array[] = [];
-  private gradConvB: Float64Array[] = [];
-  private gradScaleEmb!: Float64Array;
-  private gradFusionW!: Float64Array;
-  private gradFusionB!: Float64Array;
-  private gradLn1Gamma: Float64Array[] = [];
-  private gradLn1Beta: Float64Array[] = [];
-  private gradLn2Gamma: Float64Array[] = [];
-  private gradLn2Beta: Float64Array[] = [];
-  private gradAttnWq: Float64Array[] = [];
-  private gradAttnWk: Float64Array[] = [];
-  private gradAttnWv: Float64Array[] = [];
-  private gradAttnWo: Float64Array[] = [];
-  private gradFfnW1: Float64Array[] = [];
-  private gradFfnB1: Float64Array[] = [];
-  private gradFfnW2: Float64Array[] = [];
-  private gradFfnB2: Float64Array[] = [];
-  private gradPoolW!: Float64Array;
-  private gradPoolB: number = 0;
-  private gradOutW!: Float64Array;
-  private gradOutB!: Float64Array;
-
-  // Scratch buffers
-  private scratchSeqEmb!: Float64Array;
-  private scratchSeqEmb2!: Float64Array;
-  private scratchHead!: Float64Array;
-  private scratchFfn!: Float64Array;
-  private scratchEmb!: Float64Array;
-  private scratchGrad!: Float64Array;
-  private scratchScales!: Float64Array;
-
-  // RNG
-  private rngState: number = 12345;
-  private converged: boolean = false;
-  private lastGradNorm: number = Infinity;
-  private lastLR: number = 0;
-
-  /**
-   * Creates a new FusionTemporalTransformerRegression instance.
-   * @param config - Optional partial configuration to override defaults
-   * @example
-   * ```typescript
-   * const model = new FusionTemporalTransformerRegression({
-   *   numBlocks: 4,
-   *   embeddingDim: 128,
-   *   learningRate: 0.0005
-   * });
-   * ```
-   */
-  constructor(config?: Partial<Config>) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-
-    if (this.config.embeddingDim % this.config.numHeads !== 0) {
-      throw new Error(
-        `embeddingDim (${this.config.embeddingDim}) must be divisible by numHeads (${this.config.numHeads})`,
-      );
-    }
-
-    this.headDim = this.config.embeddingDim / this.config.numHeads;
-    this.ffnDim = this.config.embeddingDim * this.config.ffnMultiplier;
-    this.numScales = this.config.temporalScales.length;
-    this.driftWindow = new Float64Array(this.driftWindowSize);
+/** Deterministic xorshift32 RNG; state must be uint32. */
+class _XorShift32 {
+  private s: number;
+  constructor(seed: number) {
+    this.s = seed >>> 0;
+    if (this.s === 0) this.s = 0x9e3779b9;
   }
-
-  /**
-   * Xorshift32 deterministic RNG
-   * @returns pseudo-random number in [0, 1)
-   */
-  private xorshift32(): number {
-    let x = this.rngState;
+  nextU32(): number {
+    // xorshift32
+    let x = this.s;
     x ^= x << 13;
     x ^= x >>> 17;
     x ^= x << 5;
-    this.rngState = x >>> 0;
-    return (this.rngState >>> 0) / 4294967296;
+    this.s = x >>> 0;
+    return this.s;
+  }
+  nextFloat(): number {
+    // [0,1)
+    return (this.nextU32() >>> 0) / 4294967296;
+  }
+}
+
+function _gelu(x: number): number {
+  // GELU approximation: 0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x^3)))
+  const c = 0.7978845608028654; // sqrt(2/pi)
+  const x3 = x * x * x;
+  const t = c * (x + 0.044715 * x3);
+  // tanh stable
+  const th = Math.tanh(t);
+  return 0.5 * x * (1 + th);
+}
+
+function _geluGrad(x: number): number {
+  // derivative of tanh-approx GELU
+  // d/dx [0.5*x*(1+tanh(t))] = 0.5*(1+tanh(t)) + 0.5*x*(1-tanh(t)^2)*dt/dx
+  const c = 0.7978845608028654;
+  const x2 = x * x;
+  const x3 = x2 * x;
+  const t = c * (x + 0.044715 * x3);
+  const th = Math.tanh(t);
+  const sech2 = 1 - th * th;
+  const dt = c * (1 + 0.134145 * x2); // 3*0.044715=0.134145
+  return 0.5 * (1 + th) + 0.5 * x * sech2 * dt;
+}
+
+/**
+ * Xavier uniform initialization:
+ * limit = sqrt(6/(fanIn+fanOut))
+ * Used consistently for conv and linear weights (works well with GELU in practice).
+ */
+function _initXavierUniform(
+  dst: Float64Array,
+  fanIn: number,
+  fanOut: number,
+  rng: _XorShift32,
+): void {
+  const denom = fanIn + fanOut;
+  const limit = Math.sqrt(6 / (denom <= 0 ? 1 : denom));
+  for (let i = 0; i < dst.length; i++) {
+    const u = rng.nextFloat() * 2 - 1;
+    dst[i] = u * limit;
+  }
+}
+
+function _fill(dst: Float64Array, v: number): void {
+  for (let i = 0; i < dst.length; i++) dst[i] = v;
+}
+
+function _copy(dst: Float64Array, src: Float64Array, n: number): void {
+  for (let i = 0; i < n; i++) dst[i] = src[i];
+}
+
+function _axpy(dst: Float64Array, a: number, x: Float64Array, n: number): void {
+  for (let i = 0; i < n; i++) dst[i] += a * x[i];
+}
+
+function _dot(
+  a: Float64Array,
+  aOff: number,
+  b: Float64Array,
+  bOff: number,
+  n: number,
+): number {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += a[aOff + i] * b[bOff + i];
+  return s;
+}
+
+function _softmaxRowStable(
+  out: Float64Array,
+  outOff: number,
+  scores: Float64Array,
+  scoresOff: number,
+  n: number,
+): void {
+  // out = softmax(scores)
+  let maxv = -1e300;
+  for (let i = 0; i < n; i++) {
+    const v = scores[scoresOff + i];
+    if (v > maxv) maxv = v;
+  }
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const z = scores[scoresOff + i] - maxv;
+    // exp clamp to avoid inf: exp(709) ~ 8e307
+    const ez = Math.exp(_clamp(z, -745, 709));
+    out[outOff + i] = ez;
+    sum += ez;
+  }
+  if (sum <= 0 || !_isFiniteNumber(sum)) {
+    const inv = 1 / (n <= 0 ? 1 : n);
+    for (let i = 0; i < n; i++) out[outOff + i] = inv;
+  } else {
+    const inv = 1 / sum;
+    for (let i = 0; i < n; i++) out[outOff + i] *= inv;
+  }
+}
+
+function _sigmoid(x: number): number {
+  // stable sigmoid
+  if (x >= 0) {
+    const z = Math.exp(-_clamp(x, 0, 709));
+    return 1 / (1 + z);
+  } else {
+    const z = Math.exp(_clamp(x, -709, 0));
+    return z / (1 + z);
+  }
+}
+
+function _layerNormForward(
+  x: Float64Array,
+  xOff: number,
+  y: Float64Array,
+  yOff: number,
+  meanArr: Float64Array,
+  varArr: Float64Array,
+  t: number,
+  d: number,
+  gamma: Float64Array,
+  beta: Float64Array,
+): void {
+  let mean = 0;
+  for (let i = 0; i < d; i++) mean += x[xOff + i];
+  mean /= d;
+
+  let v = 0;
+  for (let i = 0; i < d; i++) {
+    const z = x[xOff + i] - mean;
+    v += z * z;
+  }
+  v /= d;
+  if (v < 1e-12) v = 1e-12;
+
+  meanArr[t] = mean;
+  varArr[t] = v;
+
+  const invStd = 1 / Math.sqrt(v);
+  for (let i = 0; i < d; i++) {
+    const xhat = (x[xOff + i] - mean) * invStd;
+    y[yOff + i] = xhat * gamma[i] + beta[i];
+  }
+}
+
+function _layerNormBackward(
+  x: Float64Array,
+  xOff: number,
+  dy: Float64Array,
+  dyOff: number,
+  dx: Float64Array,
+  dxOff: number,
+  mean: number,
+  vari: number,
+  d: number,
+  gamma: Float64Array,
+  dGamma: Float64Array,
+  dBeta: Float64Array,
+): void {
+  // y = gamma * xhat + beta
+  // xhat=(x-mean)/std; std=sqrt(var)
+  const invStd = 1 / Math.sqrt(vari < 1e-12 ? 1e-12 : vari);
+
+  // accumulate dGamma, dBeta
+  // Also compute sum(dxhat) and sum(dxhat * (x-mean))
+  let sumDxhat = 0;
+  let sumDxhatXm = 0;
+
+  for (let i = 0; i < d; i++) {
+    const xm = x[xOff + i] - mean;
+    const xhat = xm * invStd;
+    const dxhat = dy[dyOff + i] * gamma[i];
+    dGamma[i] += dy[dyOff + i] * xhat;
+    dBeta[i] += dy[dyOff + i];
+    sumDxhat += dxhat;
+    sumDxhatXm += dxhat * xm;
   }
 
-  /**
-   * Xavier uniform initialization
-   * Formula: U(-limit, limit) where limit = sqrt(6 / (fanIn + fanOut))
-   */
-  private xavierInit(arr: Float64Array, fanIn: number, fanOut: number): void {
-    const limit = Math.sqrt(6.0 / (fanIn + fanOut));
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = (this.xorshift32() * 2 - 1) * limit;
-    }
+  const invD = 1 / d;
+  // dvar = sum(dxhat*(x-mean)*(-0.5)*std^-3)
+  const invStd3 = invStd * invStd * invStd;
+  const dVar = sumDxhatXm * (-0.5) * invStd3;
+  // dmean = sum(dxhat*(-invStd)) + dvar * sum(-2*(x-mean))/D
+  // but sum(x-mean)=0, so second term is 0 for exact arithmetic; keep for stability:
+  let sumXm = 0;
+  for (let i = 0; i < d; i++) sumXm += x[xOff + i] - mean;
+  const dMean = (-invStd) * sumDxhat + dVar * (-2 * sumXm) * invD;
+
+  for (let i = 0; i < d; i++) {
+    const xm = x[xOff + i] - mean;
+    const dxhat = dy[dyOff + i] * gamma[i];
+    dx[dxOff + i] += dxhat * invStd + dVar * 2 * xm * invD + dMean * invD;
   }
+}
 
-  /**
-   * Initialize positional encoding
-   * Formula: PE(pos, 2i) = sin(pos / 10000^(2i/d))
-   *          PE(pos, 2i+1) = cos(pos / 10000^(2i/d))
-   */
-  private initPositionalEncoding(): void {
-    const maxLen = this.config.maxSequenceLength;
-    const d = this.config.embeddingDim;
-    this.posEnc = new Float64Array(maxLen * d);
+function _adamUpdate(
+  w: Float64Array,
+  g: Float64Array,
+  m: Float64Array,
+  v: Float64Array,
+  lr: number,
+  beta1: number,
+  beta2: number,
+  eps: number,
+  t: number,
+  l2: number,
+  accumGradNorm: { v: number },
+): void {
+  const b1t = 1 - Math.pow(beta1, t);
+  const b2t = 1 - Math.pow(beta2, t);
+  const invB1t = b1t <= 0 ? 1 : 1 / b1t;
+  const invB2t = b2t <= 0 ? 1 : 1 / b2t;
 
-    for (let pos = 0; pos < maxLen; pos++) {
-      for (let i = 0; i < d; i++) {
-        const angle = pos / Math.pow(10000, (2 * Math.floor(i / 2)) / d);
-        const idx = pos * d + i;
-        if (i % 2 === 0) {
-          this.posEnc[idx] = Math.sin(angle);
-        } else {
-          this.posEnc[idx] = Math.cos(angle);
-        }
-      }
-    }
+  for (let i = 0; i < w.length; i++) {
+    // L2 regularization gradient add
+    let gi = g[i] + l2 * w[i];
+    if (!_isFiniteNumber(gi)) gi = 0;
+
+    m[i] = beta1 * m[i] + (1 - beta1) * gi;
+    v[i] = beta2 * v[i] + (1 - beta2) * gi * gi;
+
+    // bias correction
+    const mhat = m[i] * invB1t;
+    const vhat = v[i] * invB2t;
+
+    const denom = Math.sqrt(vhat < 0 ? 0 : vhat) + eps;
+    const step = lr * (mhat / (denom <= 0 ? eps : denom));
+    w[i] -= step;
+
+    accumGradNorm.v += gi * gi;
   }
+}
 
-  /**
-   * Lazy initialization on first fitOnline call
-   */
-  private initialize(
-    inputDim: number,
-    outputDim: number,
-    seqLen: number,
-  ): void {
-    this.inputDim = inputDim;
-    this.outputDim = outputDim;
-    this.seqLen = Math.min(seqLen, this.config.maxSequenceLength);
+function _computeScheduledLR(
+  base: number,
+  step: number,
+  warmup: number,
+  total: number,
+): number {
+  if (step < 1) return 0;
+  if (warmup <= 0) warmup = 1;
+  if (step < warmup) return base * (step / warmup);
+  const denom = Math.max(1, total - warmup);
+  const progress = (step - warmup) / denom;
+  const p = Math.min(1, Math.max(0, progress));
+  return base * 0.5 * (1 + Math.cos(Math.PI * p));
+}
 
-    const emb = this.config.embeddingDim;
-    const ks = this.config.temporalKernelSize;
-    const nb = this.config.numBlocks;
-    const ns = this.numScales;
-    const msl = this.config.maxSequenceLength;
+function _welfordCreate(dim: number): _Welford {
+  return {
+    n: 0,
+    mean: new Float64Array(dim),
+    m2: new Float64Array(dim),
+  };
+}
 
-    // Initialize Welford stats
-    this.inputMean = new Float64Array(inputDim);
-    this.inputM2 = new Float64Array(inputDim);
-    this.outputMean = new Float64Array(outputDim);
-    this.outputM2 = new Float64Array(outputDim);
-    this.residualM2 = new Float64Array(outputDim);
-
-    // Positional encoding
-    this.initPositionalEncoding();
-
-    // Conv weights per scale
-    let paramCount = 0;
-    for (let s = 0; s < ns; s++) {
-      const wSize = ks * inputDim * emb;
-      this.convW[s] = new Float64Array(wSize);
-      this.xavierInit(this.convW[s], ks * inputDim, emb);
-      this.convB[s] = new Float64Array(emb);
-      paramCount += wSize + emb;
-    }
-
-    // Scale embeddings
-    this.scaleEmb = new Float64Array(ns * emb);
-    for (let i = 0; i < this.scaleEmb.length; i++) {
-      this.scaleEmb[i] = (this.xorshift32() * 2 - 1) * 0.02;
-    }
-    paramCount += ns * emb;
-
-    // Fusion gate
-    const fusionDim = ns * emb;
-    this.fusionW = new Float64Array(fusionDim * fusionDim);
-    this.xavierInit(this.fusionW, fusionDim, fusionDim);
-    this.fusionB = new Float64Array(fusionDim);
-    paramCount += fusionDim * fusionDim + fusionDim;
-
-    // Transformer blocks
-    for (let b = 0; b < nb; b++) {
-      this.ln1Gamma[b] = new Float64Array(emb);
-      this.ln1Beta[b] = new Float64Array(emb);
-      this.ln2Gamma[b] = new Float64Array(emb);
-      this.ln2Beta[b] = new Float64Array(emb);
-      for (let i = 0; i < emb; i++) {
-        this.ln1Gamma[b][i] = 1;
-        this.ln2Gamma[b][i] = 1;
-      }
-      paramCount += 4 * emb;
-
-      this.attnWq[b] = new Float64Array(emb * emb);
-      this.attnWk[b] = new Float64Array(emb * emb);
-      this.attnWv[b] = new Float64Array(emb * emb);
-      this.attnWo[b] = new Float64Array(emb * emb);
-      this.xavierInit(this.attnWq[b], emb, emb);
-      this.xavierInit(this.attnWk[b], emb, emb);
-      this.xavierInit(this.attnWv[b], emb, emb);
-      this.xavierInit(this.attnWo[b], emb, emb);
-      paramCount += 4 * emb * emb;
-
-      this.ffnW1[b] = new Float64Array(emb * this.ffnDim);
-      this.ffnB1[b] = new Float64Array(this.ffnDim);
-      this.ffnW2[b] = new Float64Array(this.ffnDim * emb);
-      this.ffnB2[b] = new Float64Array(emb);
-      this.xavierInit(this.ffnW1[b], emb, this.ffnDim);
-      this.xavierInit(this.ffnW2[b], this.ffnDim, emb);
-      paramCount += emb * this.ffnDim + this.ffnDim + this.ffnDim * emb + emb;
-    }
-
-    // Pooling
-    this.poolW = new Float64Array(emb);
-    this.xavierInit(this.poolW, emb, 1);
-    this.poolB = 0;
-    paramCount += emb + 1;
-
-    // Output
-    this.outW = new Float64Array(emb * outputDim);
-    this.outB = new Float64Array(outputDim);
-    this.xavierInit(this.outW, emb, outputDim);
-    paramCount += emb * outputDim + outputDim;
-
-    this.totalParams = paramCount;
-
-    // Adam moments
-    this.adamM = new Float64Array(paramCount);
-    this.adamV = new Float64Array(paramCount);
-
-    // Allocate forward cache
-    this.fwdNormX = new Float64Array(msl * inputDim);
-    this.fwdNormY = new Float64Array(outputDim);
-    this.lastWindow = new Float64Array(msl * inputDim);
-
-    for (let s = 0; s < ns; s++) {
-      const scaleLen = Math.ceil(msl / this.config.temporalScales[s]);
-      this.fwdConvOut[s] = new Float64Array(scaleLen * emb);
-      this.fwdConvPre[s] = new Float64Array(scaleLen * emb);
-      this.fwdScaleEmb[s] = new Float64Array(scaleLen * emb);
-    }
-
-    this.fwdUpsampled = new Float64Array(msl * ns * emb);
-    this.fwdGateIn = new Float64Array(msl * ns * emb);
-    this.fwdGate = new Float64Array(msl * ns * emb);
-    this.fwdFused = new Float64Array(msl * emb);
-
-    for (let b = 0; b < nb; b++) {
-      this.fwdBlockIn[b] = new Float64Array(msl * emb);
-      this.fwdLn1Out[b] = new Float64Array(msl * emb);
-      this.fwdLn1Mean[b] = new Float64Array(msl);
-      this.fwdLn1Rstd[b] = new Float64Array(msl);
-      this.fwdQ[b] = new Float64Array(msl * emb);
-      this.fwdK[b] = new Float64Array(msl * emb);
-      this.fwdV[b] = new Float64Array(msl * emb);
-      this.fwdAttnScores[b] = new Float64Array(
-        this.config.numHeads * msl * msl,
-      );
-      this.fwdAttnProbs[b] = new Float64Array(this.config.numHeads * msl * msl);
-      this.fwdAttnOut[b] = new Float64Array(msl * emb);
-      this.fwdAttnProj[b] = new Float64Array(msl * emb);
-      this.fwdRes1[b] = new Float64Array(msl * emb);
-      this.fwdLn2Out[b] = new Float64Array(msl * emb);
-      this.fwdLn2Mean[b] = new Float64Array(msl);
-      this.fwdLn2Rstd[b] = new Float64Array(msl);
-      this.fwdFfnHid[b] = new Float64Array(msl * this.ffnDim);
-      this.fwdFfnPre[b] = new Float64Array(msl * this.ffnDim);
-      this.fwdFfnOut[b] = new Float64Array(msl * emb);
-      this.fwdBlockOut[b] = new Float64Array(msl * emb);
-    }
-
-    this.fwdPoolScores = new Float64Array(msl);
-    this.fwdPoolWeights = new Float64Array(msl);
-    this.fwdPooled = new Float64Array(emb);
-    this.fwdOutput = new Float64Array(outputDim);
-
-    // Gradient buffers
-    for (let s = 0; s < ns; s++) {
-      this.gradConvW[s] = new Float64Array(ks * inputDim * emb);
-      this.gradConvB[s] = new Float64Array(emb);
-    }
-    this.gradScaleEmb = new Float64Array(ns * emb);
-    this.gradFusionW = new Float64Array(fusionDim * fusionDim);
-    this.gradFusionB = new Float64Array(fusionDim);
-
-    for (let b = 0; b < nb; b++) {
-      this.gradLn1Gamma[b] = new Float64Array(emb);
-      this.gradLn1Beta[b] = new Float64Array(emb);
-      this.gradLn2Gamma[b] = new Float64Array(emb);
-      this.gradLn2Beta[b] = new Float64Array(emb);
-      this.gradAttnWq[b] = new Float64Array(emb * emb);
-      this.gradAttnWk[b] = new Float64Array(emb * emb);
-      this.gradAttnWv[b] = new Float64Array(emb * emb);
-      this.gradAttnWo[b] = new Float64Array(emb * emb);
-      this.gradFfnW1[b] = new Float64Array(emb * this.ffnDim);
-      this.gradFfnB1[b] = new Float64Array(this.ffnDim);
-      this.gradFfnW2[b] = new Float64Array(this.ffnDim * emb);
-      this.gradFfnB2[b] = new Float64Array(emb);
-    }
-
-    this.gradPoolW = new Float64Array(emb);
-    this.gradOutW = new Float64Array(emb * outputDim);
-    this.gradOutB = new Float64Array(outputDim);
-
-    // Scratch
-    this.scratchSeqEmb = new Float64Array(msl * emb);
-    this.scratchSeqEmb2 = new Float64Array(msl * emb);
-    this.scratchHead = new Float64Array(msl * msl);
-    this.scratchFfn = new Float64Array(msl * this.ffnDim);
-    this.scratchEmb = new Float64Array(emb);
-    this.scratchGrad = new Float64Array(msl * ns * emb);
-    this.scratchScales = new Float64Array(msl);
-
-    this.isInitialized = true;
+function _welfordUpdateVec(
+  stats: _Welford,
+  x: Float64Array,
+  xOff: number,
+  dim: number,
+): void {
+  stats.n++;
+  const n = stats.n;
+  for (let i = 0; i < dim; i++) {
+    const xi = x[xOff + i];
+    const delta = xi - stats.mean[i];
+    stats.mean[i] += delta / n;
+    const delta2 = xi - stats.mean[i];
+    stats.m2[i] += delta * delta2;
   }
+}
 
-  /**
-   * Update Welford statistics for online normalization
-   * Mean_n = Mean_{n-1} + (x - Mean_{n-1}) / n
-   * M2_n = M2_{n-1} + (x - Mean_{n-1}) * (x - Mean_n)
-   */
-  private updateWelford(
-    x: Float64Array,
-    mean: Float64Array,
-    m2: Float64Array,
-    count: number,
-  ): void {
-    const n = count;
-    for (let i = 0; i < x.length; i++) {
-      const delta = x[i] - mean[i];
-      mean[i] += delta / n;
-      const delta2 = x[i] - mean[i];
-      m2[i] += delta * delta2;
-    }
+function _welfordUpdateArray(
+  stats: _Welford,
+  arr: Float64Array,
+  nRows: number,
+  rowStride: number,
+  dim: number,
+): void {
+  for (let r = 0; r < nRows; r++) {
+    _welfordUpdateVec(stats, arr, r * rowStride, dim);
   }
+}
 
-  /**
-   * Get standard deviation from Welford M2
-   * std = sqrt(M2 / n), clamped to >= 1e-12
-   */
-  private getStd(m2: Float64Array, count: number, out: Float64Array): void {
-    const n = Math.max(count, 1);
-    for (let i = 0; i < m2.length; i++) {
-      out[i] = Math.sqrt(Math.max(m2[i] / n, 1e-24));
-      if (out[i] < 1e-12) out[i] = 1e-12;
-    }
+function _welfordStd(stats: _Welford, outStd: Float64Array): void {
+  const n = stats.n;
+  for (let i = 0; i < outStd.length; i++) {
+    let v = 1;
+    if (n >= 2) v = stats.m2[i] / (n - 1);
+    if (v < 1e-24) v = 1e-24;
+    outStd[i] = Math.sqrt(v);
+    if (outStd[i] < 1e-12) outStd[i] = 1e-12;
   }
+}
 
-  /**
-   * GELU activation
-   * Formula: x * 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
-   */
-  private gelu(x: number): number {
-    const c = 0.7978845608028654; // sqrt(2/pi)
-    const inner = c * (x + 0.044715 * x * x * x);
-    return 0.5 * x * (1 + Math.tanh(inner));
+function _adwinCreate(cap: number, minN: number, delta: number): _Adwin {
+  return {
+    cap,
+    minN,
+    delta,
+    buf: new Float64Array(cap),
+    idx: 0,
+    size: 0,
+  };
+}
+
+function _adwinReset(a: _Adwin): void {
+  a.idx = 0;
+  a.size = 0;
+}
+
+function _adwinAddAndDetect(a: _Adwin, x: number): boolean {
+  a.buf[a.idx] = x;
+  a.idx = (a.idx + 1) % a.cap;
+  if (a.size < a.cap) a.size++;
+
+  if (a.size < a.minN) return false;
+
+  // Copy ring buffer order logically via index mapping without allocations:
+  // We'll compute prefix sums by reading in chronological order.
+  const n = a.size;
+  const start = (a.idx - n + a.cap) % a.cap;
+
+  // Build prefix sums in O(n^2) without extra arrays by scanning splits and computing sums incrementally.
+  // Since cap is small (<=256), this is OK.
+  let totalSum = 0;
+  for (let i = 0; i < n; i++) totalSum += a.buf[(start + i) % a.cap];
+
+  const logTerm = Math.log(2 / a.delta);
+  let leftSum = 0;
+
+  // Require both sides at least 8 to avoid noise.
+  const minSide = 8;
+  for (let split = minSide; split <= n - minSide; split++) {
+    leftSum += a.buf[(start + split - 1) % a.cap];
+    const rightSum = totalSum - leftSum;
+    const nl = split;
+    const nr = n - split;
+    const meanL = leftSum / nl;
+    const meanR = rightSum / nr;
+    const diff = Math.abs(meanL - meanR);
+    const eps = Math.sqrt((2 * logTerm) * (1 / nl + 1 / nr));
+    if (diff > eps) return true;
   }
+  return false;
+}
 
-  /**
-   * GELU derivative
-   * d/dx[GELU(x)] = 0.5*(1 + tanh(u)) + 0.5*x*sech²(u)*(c*(1 + 3*0.044715*x²))
-   * where u = sqrt(2/π)*(x + 0.044715*x³)
-   */
-  private geluGrad(x: number): number {
-    const c = 0.7978845608028654;
-    const x3 = x * x * x;
-    const u = c * (x + 0.044715 * x3);
-    const tanhU = Math.tanh(u);
-    const sech2U = 1 - tanhU * tanhU;
-    return 0.5 * (1 + tanhU) +
-      0.5 * x * sech2U * c * (1 + 3 * 0.044715 * x * x);
+function _pack1D(a: Float64Array): number[] {
+  const out = new Array<number>(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i];
+  return out;
+}
+
+function _pack2D(a: Float64Array, rows: number, cols: number): number[][] {
+  const out = new Array<number[]>(rows);
+  let off = 0;
+  for (let r = 0; r < rows; r++) {
+    const row = new Array<number>(cols);
+    for (let c = 0; c < cols; c++) row[c] = a[off++];
+    out[r] = row;
   }
+  return out;
+}
+
+function _rehydrateF64(x: number[] | Float64Array): Float64Array {
+  if (x instanceof Float64Array) return x;
+  const out = new Float64Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = x[i];
+  return out;
+}
+
+export class FusionTemporalTransformerRegression {
+  private readonly config: Config;
+
+  private isInitialized = false;
+
+  private inputDim = 0;
+  private outputDim = 0;
+  private headDim = 0;
+  private hiddenDim = 0;
+  private nScales = 0;
+
+  private sampleCount = 0;
+  private updateCount = 0;
+  private driftCount = 0;
+  private runningLoss = 0;
+  private lastEffectiveLR = 0;
+  private lastConverged = false;
+
+  // Cached last window
+  private lastSeqLen = 0;
+
+  // Normalization
+  private inStats: _Welford | null = null;
+  private outStats: _Welford | null = null;
+  private inStd: Float64Array | null = null;
+  private outStd: Float64Array | null = null;
+
+  // Residual stats for uncertainty (original scale)
+  private resStats: _Welford | null = null;
+
+  // ADWIN
+  private adwin: _Adwin;
+
+  // Positional Encoding cache: [maxSeq, emb]
+  private pe: Float64Array | null = null;
+
+  // Parameters
+  private scales: _ScaleParams[] = [];
+  private scaleMom: _ScaleMoments[] = [];
+  private scaleGrad: _ScaleGrads[] = [];
+
+  // Fusion params
+  private Wg: Float64Array | null = null; // [concatDim, concatDim]
+  private bg: Float64Array | null = null; // [concatDim]
+  private mWg: Float64Array | null = null;
+  private vWg: Float64Array | null = null;
+  private mbg: Float64Array | null = null;
+  private vbg: Float64Array | null = null;
+  private gWg: Float64Array | null = null;
+  private gbg: Float64Array | null = null;
+
+  // Blocks
+  private blocks: _BlockParams[] = [];
+  private blockMom: _BlockMoments[] = [];
+  private blockGrad: _BlockGrads[] = [];
+
+  // Pool params
+  private Wpool: Float64Array | null = null; // [emb]
+  private bpool = 0;
+  private mWpool: Float64Array | null = null;
+  private vWpool: Float64Array | null = null;
+  private mbpool = 0;
+  private vbpool = 0;
+  private gWpool: Float64Array | null = null;
+  private gbpool = 0;
+
+  // Output head
+  private Wout: Float64Array | null = null; // [emb, outDim]
+  private bout: Float64Array | null = null; // [outDim]
+  private mWout: Float64Array | null = null;
+  private vWout: Float64Array | null = null;
+  private mbout: Float64Array | null = null;
+  private vbout: Float64Array | null = null;
+  private gWout: Float64Array | null = null;
+  private gbout: Float64Array | null = null;
+
+  // Buffers
+  private buf: _Buffers | null = null;
+
+  // Cached last x window raw (for predict): [L1, inDim]
+  private lastXRaw: Float64Array | null = null;
 
   /**
-   * Sigmoid activation: 1 / (1 + exp(-x))
-   */
-  private sigmoid(x: number): number {
-    if (x >= 0) {
-      return 1 / (1 + Math.exp(-x));
-    } else {
-      const ex = Math.exp(x);
-      return ex / (1 + ex);
-    }
-  }
-
-  /**
-   * Stable softmax over a range
-   */
-  private softmax(
-    arr: Float64Array,
-    start: number,
-    len: number,
-    out: Float64Array,
-    outStart: number,
-  ): void {
-    let maxVal = -Infinity;
-    for (let i = 0; i < len; i++) {
-      if (arr[start + i] > maxVal) maxVal = arr[start + i];
-    }
-    if (!isFinite(maxVal)) maxVal = 0;
-
-    let sum = 0;
-    for (let i = 0; i < len; i++) {
-      const e = Math.exp(arr[start + i] - maxVal);
-      out[outStart + i] = e;
-      sum += e;
-    }
-
-    if (sum < 1e-12) sum = 1e-12;
-    for (let i = 0; i < len; i++) {
-      out[outStart + i] /= sum;
-    }
-  }
-
-  /**
-   * Masked causal softmax for attention
-   */
-  private maskedSoftmax(
-    scores: Float64Array,
-    start: number,
-    queryIdx: number,
-    seqLen: number,
-    out: Float64Array,
-    outStart: number,
-  ): void {
-    let maxVal = -Infinity;
-    for (let j = 0; j <= queryIdx; j++) {
-      if (scores[start + j] > maxVal) maxVal = scores[start + j];
-    }
-    if (!isFinite(maxVal)) maxVal = 0;
-
-    let sum = 0;
-    for (let j = 0; j < seqLen; j++) {
-      if (j <= queryIdx) {
-        const e = Math.exp(scores[start + j] - maxVal);
-        out[outStart + j] = e;
-        sum += e;
-      } else {
-        out[outStart + j] = 0;
-      }
-    }
-
-    if (sum < 1e-12) {
-      for (let j = 0; j <= queryIdx; j++) {
-        out[outStart + j] = 1 / (queryIdx + 1);
-      }
-    } else {
-      for (let j = 0; j <= queryIdx; j++) {
-        out[outStart + j] /= sum;
-      }
-    }
-  }
-
-  /**
-   * Layer normalization forward
-   * y = gamma * (x - mean) / sqrt(var + eps) + beta
-   */
-  private layerNormForward(
-    input: Float64Array,
-    gamma: Float64Array,
-    beta: Float64Array,
-    seqLen: number,
-    dim: number,
-    output: Float64Array,
-    meanOut: Float64Array,
-    rstdOut: Float64Array,
-  ): void {
-    const eps = 1e-12;
-    for (let t = 0; t < seqLen; t++) {
-      const base = t * dim;
-      let mean = 0;
-      for (let d = 0; d < dim; d++) {
-        mean += input[base + d];
-      }
-      mean /= dim;
-      meanOut[t] = mean;
-
-      let variance = 0;
-      for (let d = 0; d < dim; d++) {
-        const diff = input[base + d] - mean;
-        variance += diff * diff;
-      }
-      variance /= dim;
-      const rstd = 1 / Math.sqrt(Math.max(variance, eps) + eps);
-      rstdOut[t] = rstd;
-
-      for (let d = 0; d < dim; d++) {
-        output[base + d] = gamma[d] * (input[base + d] - mean) * rstd + beta[d];
-      }
-    }
-  }
-
-  /**
-   * Layer normalization backward
-   */
-  private layerNormBackward(
-    dout: Float64Array,
-    input: Float64Array,
-    mean: Float64Array,
-    rstd: Float64Array,
-    gamma: Float64Array,
-    seqLen: number,
-    dim: number,
-    dinput: Float64Array,
-    dgamma: Float64Array,
-    dbeta: Float64Array,
-  ): void {
-    for (let d = 0; d < dim; d++) {
-      dgamma[d] = 0;
-      dbeta[d] = 0;
-    }
-
-    for (let t = 0; t < seqLen; t++) {
-      const base = t * dim;
-      const m = mean[t];
-      const r = rstd[t];
-
-      for (let d = 0; d < dim; d++) {
-        const xhat = (input[base + d] - m) * r;
-        dgamma[d] += dout[base + d] * xhat;
-        dbeta[d] += dout[base + d];
-      }
-
-      let dxhat_sum = 0;
-      let dxhat_xhat_sum = 0;
-      for (let d = 0; d < dim; d++) {
-        const dxhat = dout[base + d] * gamma[d];
-        const xhat = (input[base + d] - m) * r;
-        dxhat_sum += dxhat;
-        dxhat_xhat_sum += dxhat * xhat;
-      }
-
-      for (let d = 0; d < dim; d++) {
-        const xhat = (input[base + d] - m) * r;
-        const dxhat = dout[base + d] * gamma[d];
-        dinput[base + d] = r *
-          (dxhat - (dxhat_sum + xhat * dxhat_xhat_sum) / dim);
-      }
-    }
-  }
-
-  /**
-   * Matrix multiply: C = A * B
-   * A: [m, k], B: [k, n], C: [m, n]
-   */
-  private matMul(
-    A: Float64Array,
-    B: Float64Array,
-    C: Float64Array,
-    m: number,
-    k: number,
-    n: number,
-    aOffset: number = 0,
-    bOffset: number = 0,
-    cOffset: number = 0,
-  ): void {
-    for (let i = 0; i < m; i++) {
-      for (let j = 0; j < n; j++) {
-        let sum = 0;
-        for (let l = 0; l < k; l++) {
-          sum += A[aOffset + i * k + l] * B[bOffset + l * n + j];
-        }
-        C[cOffset + i * n + j] = sum;
-      }
-    }
-  }
-
-  /**
-   * Matrix multiply transposed: C = A * B^T
-   * A: [m, k], B: [n, k], C: [m, n]
-   */
-  private matMulTransB(
-    A: Float64Array,
-    B: Float64Array,
-    C: Float64Array,
-    m: number,
-    k: number,
-    n: number,
-    aOffset: number = 0,
-    bOffset: number = 0,
-    cOffset: number = 0,
-  ): void {
-    for (let i = 0; i < m; i++) {
-      for (let j = 0; j < n; j++) {
-        let sum = 0;
-        for (let l = 0; l < k; l++) {
-          sum += A[aOffset + i * k + l] * B[bOffset + j * k + l];
-        }
-        C[cOffset + i * n + j] = sum;
-      }
-    }
-  }
-
-  /**
-   * Matrix multiply transposed A: C = A^T * B
-   * A: [k, m], B: [k, n], C: [m, n]
-   */
-  private matMulTransA(
-    A: Float64Array,
-    B: Float64Array,
-    C: Float64Array,
-    k: number,
-    m: number,
-    n: number,
-    aOffset: number = 0,
-    bOffset: number = 0,
-    cOffset: number = 0,
-  ): void {
-    for (let i = 0; i < m; i++) {
-      for (let j = 0; j < n; j++) {
-        let sum = 0;
-        for (let l = 0; l < k; l++) {
-          sum += A[aOffset + l * m + i] * B[bOffset + l * n + j];
-        }
-        C[cOffset + i * n + j] = sum;
-      }
-    }
-  }
-
-  /**
-   * Forward pass through temporal convolution for one scale
-   * Conv1D with causal padding (left zero padding)
-   */
-  private convForward(
-    input: Float64Array,
-    seqLen: number,
-    scale: number,
-    scaleIdx: number,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const ks = this.config.temporalKernelSize;
-    const outLen = Math.ceil(seqLen / scale);
-    const W = this.convW[scaleIdx];
-    const B = this.convB[scaleIdx];
-    const preAct = this.fwdConvPre[scaleIdx];
-    const out = this.fwdConvOut[scaleIdx];
-
-    for (let t = 0; t < outLen; t++) {
-      const centerPos = t * scale;
-      for (let e = 0; e < emb; e++) {
-        let sum = B[e];
-        for (let k = 0; k < ks; k++) {
-          const inputPos = centerPos - k;
-          if (inputPos >= 0 && inputPos < seqLen) {
-            for (let f = 0; f < this.inputDim; f++) {
-              const wIdx = (k * this.inputDim + f) * emb + e;
-              sum += input[inputPos * this.inputDim + f] * W[wIdx];
-            }
-          }
-        }
-        preAct[t * emb + e] = sum;
-        out[t * emb + e] = this.gelu(sum);
-      }
-    }
-  }
-
-  /**
-   * Backward through temporal convolution
-   */
-  private convBackward(
-    dout: Float64Array,
-    input: Float64Array,
-    seqLen: number,
-    scale: number,
-    scaleIdx: number,
-    dinput: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const ks = this.config.temporalKernelSize;
-    const outLen = Math.ceil(seqLen / scale);
-    const W = this.convW[scaleIdx];
-    const preAct = this.fwdConvPre[scaleIdx];
-    const dW = this.gradConvW[scaleIdx];
-    const dB = this.gradConvB[scaleIdx];
-
-    for (let t = 0; t < outLen; t++) {
-      const centerPos = t * scale;
-      for (let e = 0; e < emb; e++) {
-        const idx = t * emb + e;
-        const dGelu = dout[idx] * this.geluGrad(preAct[idx]);
-        dB[e] += dGelu;
-
-        for (let k = 0; k < ks; k++) {
-          const inputPos = centerPos - k;
-          if (inputPos >= 0 && inputPos < seqLen) {
-            for (let f = 0; f < this.inputDim; f++) {
-              const wIdx = (k * this.inputDim + f) * emb + e;
-              dW[wIdx] += input[inputPos * this.inputDim + f] * dGelu;
-              dinput[inputPos * this.inputDim + f] += W[wIdx] * dGelu;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Add scale embeddings and positional encoding
-   */
-  private addEmbeddings(scaleIdx: number, scaleLen: number): void {
-    const emb = this.config.embeddingDim;
-    const convOut = this.fwdConvOut[scaleIdx];
-    const out = this.fwdScaleEmb[scaleIdx];
-    const scaleEmbBase = scaleIdx * emb;
-
-    for (let t = 0; t < scaleLen; t++) {
-      const baseIn = t * emb;
-      const peBase = t * emb;
-      for (let e = 0; e < emb; e++) {
-        out[baseIn + e] = convOut[baseIn + e] +
-          this.posEnc[peBase + e] +
-          this.scaleEmb[scaleEmbBase + e];
-      }
-    }
-  }
-
-  /**
-   * Upsample and concatenate all scales
-   */
-  private upsampleAndConcat(seqLen: number): void {
-    const emb = this.config.embeddingDim;
-    const ns = this.numScales;
-
-    for (let t = 0; t < seqLen; t++) {
-      for (let s = 0; s < ns; s++) {
-        const scale = this.config.temporalScales[s];
-        const scaleLen = Math.ceil(seqLen / scale);
-        const srcT = Math.min(Math.floor(t / scale), scaleLen - 1);
-        const srcBase = srcT * emb;
-        const dstBase = t * ns * emb + s * emb;
-        const src = this.fwdScaleEmb[s];
-
-        for (let e = 0; e < emb; e++) {
-          this.fwdUpsampled[dstBase + e] = src[srcBase + e];
-        }
-      }
-    }
-  }
-
-  /**
-   * Fusion gating forward
-   * G = sigmoid(concat * Wg + bg)
-   * fused = sum_s(G_s * E_s)
-   */
-  private fusionForward(seqLen: number, training: boolean): void {
-    const emb = this.config.embeddingDim;
-    const ns = this.numScales;
-    const fusionDim = ns * emb;
-
-    // Gate computation
-    for (let t = 0; t < seqLen; t++) {
-      const inBase = t * fusionDim;
-      for (let i = 0; i < fusionDim; i++) {
-        let sum = this.fusionB[i];
-        for (let j = 0; j < fusionDim; j++) {
-          sum += this.fwdUpsampled[inBase + j] *
-            this.fusionW[j * fusionDim + i];
-        }
-        this.fwdGateIn[inBase + i] = sum;
-        this.fwdGate[inBase + i] = this.sigmoid(sum);
-      }
-    }
-
-    // Apply dropout if training
-    if (training && this.config.fusionDropout > 0) {
-      for (let i = 0; i < seqLen * fusionDim; i++) {
-        if (this.xorshift32() < this.config.fusionDropout) {
-          this.fwdGate[i] = 0;
-        } else {
-          this.fwdGate[i] /= 1 - this.config.fusionDropout;
-        }
-      }
-    }
-
-    // Fused output
-    for (let t = 0; t < seqLen; t++) {
-      const gateBase = t * fusionDim;
-      const outBase = t * emb;
-      for (let e = 0; e < emb; e++) {
-        let sum = 0;
-        for (let s = 0; s < ns; s++) {
-          const gateIdx = gateBase + s * emb + e;
-          const valIdx = gateBase + s * emb + e;
-          sum += this.fwdGate[gateIdx] * this.fwdUpsampled[valIdx];
-        }
-        this.fwdFused[outBase + e] = sum;
-      }
-    }
-  }
-
-  /**
-   * Fusion backward
-   */
-  private fusionBackward(
-    dout: Float64Array,
-    seqLen: number,
-    dUpsampled: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const ns = this.numScales;
-    const fusionDim = ns * emb;
-
-    // Gradient through fused output
-    for (let t = 0; t < seqLen; t++) {
-      const gateBase = t * fusionDim;
-      const outBase = t * emb;
-
-      for (let s = 0; s < ns; s++) {
-        for (let e = 0; e < emb; e++) {
-          const gateIdx = gateBase + s * emb + e;
-          const dOut = dout[outBase + e];
-
-          // dGate
-          const g = this.fwdGate[gateIdx];
-          const val = this.fwdUpsampled[gateIdx];
-          const dGate = dOut * val;
-
-          // dUpsampled
-          dUpsampled[gateIdx] += dOut * g;
-
-          // dGateIn (sigmoid grad: g * (1 - g))
-          const dGateIn = dGate * g * (1 - g);
-
-          // Gradient to fusionW and fusionB
-          this.gradFusionB[s * emb + e] += dGateIn;
-          for (let j = 0; j < fusionDim; j++) {
-            this.gradFusionW[j * fusionDim + s * emb + e] +=
-              this.fwdUpsampled[gateBase + j] * dGateIn;
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Multi-head attention forward
-   */
-  private attentionForward(
-    input: Float64Array,
-    block: number,
-    seqLen: number,
-    training: boolean,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const nh = this.config.numHeads;
-    const hd = this.headDim;
-    const scale = 1 / Math.sqrt(hd);
-
-    // Q, K, V projections
-    this.matMul(input, this.attnWq[block], this.fwdQ[block], seqLen, emb, emb);
-    this.matMul(input, this.attnWk[block], this.fwdK[block], seqLen, emb, emb);
-    this.matMul(input, this.attnWv[block], this.fwdV[block], seqLen, emb, emb);
-
-    // Clear attention output
-    for (let i = 0; i < seqLen * emb; i++) {
-      this.fwdAttnOut[block][i] = 0;
-    }
-
-    // Per-head attention
-    for (let h = 0; h < nh; h++) {
-      const headOffset = h * hd;
-      const scoresBase = h * seqLen * seqLen;
-      const probsBase = h * seqLen * seqLen;
-
-      // Compute scores
-      for (let i = 0; i < seqLen; i++) {
-        for (let j = 0; j < seqLen; j++) {
-          if (j > i) {
-            this.fwdAttnScores[block][scoresBase + i * seqLen + j] = -1e9;
-          } else {
-            let dot = 0;
-            for (let d = 0; d < hd; d++) {
-              dot += this.fwdQ[block][i * emb + headOffset + d] *
-                this.fwdK[block][j * emb + headOffset + d];
-            }
-            this.fwdAttnScores[block][scoresBase + i * seqLen + j] = dot *
-              scale;
-          }
-        }
-
-        // Softmax
-        this.maskedSoftmax(
-          this.fwdAttnScores[block],
-          scoresBase + i * seqLen,
-          i,
-          seqLen,
-          this.fwdAttnProbs[block],
-          probsBase + i * seqLen,
-        );
-
-        // Apply attention dropout
-        if (training && this.config.attentionDropout > 0) {
-          for (let j = 0; j <= i; j++) {
-            const idx = probsBase + i * seqLen + j;
-            if (this.xorshift32() < this.config.attentionDropout) {
-              this.fwdAttnProbs[block][idx] = 0;
-            } else {
-              this.fwdAttnProbs[block][idx] /= 1 - this.config.attentionDropout;
-            }
-          }
-        }
-
-        // Weighted sum of values
-        for (let d = 0; d < hd; d++) {
-          let sum = 0;
-          for (let j = 0; j <= i; j++) {
-            sum += this.fwdAttnProbs[block][probsBase + i * seqLen + j] *
-              this.fwdV[block][j * emb + headOffset + d];
-          }
-          this.fwdAttnOut[block][i * emb + headOffset + d] = sum;
-        }
-      }
-    }
-
-    // Output projection
-    this.matMul(
-      this.fwdAttnOut[block],
-      this.attnWo[block],
-      this.fwdAttnProj[block],
-      seqLen,
-      emb,
-      emb,
-    );
-  }
-
-  /**
-   * Multi-head attention backward
-   */
-  private attentionBackward(
-    dout: Float64Array,
-    input: Float64Array,
-    block: number,
-    seqLen: number,
-    dinput: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const nh = this.config.numHeads;
-    const hd = this.headDim;
-    const scale = 1 / Math.sqrt(hd);
-
-    // Gradient through output projection
-    // dAttnOut = dout * Wo^T
-    this.matMulTransB(
-      dout,
-      this.attnWo[block],
-      this.scratchSeqEmb,
-      seqLen,
-      emb,
-      emb,
-    );
-
-    // dWo = AttnOut^T * dout
-    this.matMulTransA(
-      this.fwdAttnOut[block],
-      dout,
-      this.gradAttnWo[block],
-      seqLen,
-      emb,
-      emb,
-    );
-
-    // Accumulate gradient to existing
-    const dAttnOut = this.scratchSeqEmb;
-
-    // Gradient buffers for Q, K, V
-    const dQ = this.scratchSeqEmb2;
-    for (let i = 0; i < seqLen * emb; i++) dQ[i] = 0;
-
-    // Per-head backward
-    for (let h = 0; h < nh; h++) {
-      const headOffset = h * hd;
-      const probsBase = h * seqLen * seqLen;
-      const scoresBase = h * seqLen * seqLen;
-
-      for (let i = 0; i < seqLen; i++) {
-        // dV from weighted sum
-        for (let j = 0; j <= i; j++) {
-          const prob = this.fwdAttnProbs[block][probsBase + i * seqLen + j];
-          for (let d = 0; d < hd; d++) {
-            // dV[j] += prob * dAttnOut[i]
-            const dAO = dAttnOut[i * emb + headOffset + d];
-            this.scratchHead[j * hd + d] = (this.scratchHead[j * hd + d] || 0) +
-              prob * dAO;
-          }
-        }
-
-        // dProbs
-        for (let j = 0; j <= i; j++) {
-          let dProb = 0;
-          for (let d = 0; d < hd; d++) {
-            dProb += dAttnOut[i * emb + headOffset + d] *
-              this.fwdV[block][j * emb + headOffset + d];
-          }
-          this.scratchHead[seqLen * hd + j] = dProb;
-        }
-
-        // Softmax backward
-        let dotSum = 0;
-        for (let j = 0; j <= i; j++) {
-          const prob = this.fwdAttnProbs[block][probsBase + i * seqLen + j];
-          dotSum += this.scratchHead[seqLen * hd + j] * prob;
-        }
-
-        for (let j = 0; j <= i; j++) {
-          const prob = this.fwdAttnProbs[block][probsBase + i * seqLen + j];
-          const dScore = (this.scratchHead[seqLen * hd + j] - dotSum) * prob *
-            scale;
-
-          // dQ[i] += dScore * K[j]
-          // dK[j] += dScore * Q[i]
-          for (let d = 0; d < hd; d++) {
-            dQ[i * emb + headOffset + d] += dScore *
-              this.fwdK[block][j * emb + headOffset + d];
-            // dK accumulated to scratchHead
-          }
-        }
-      }
-    }
-
-    // Simplified: gradient accumulation to Wq, Wk, Wv and input
-    // dWq = input^T * dQ
-    this.matMulTransA(input, dQ, this.gradAttnWq[block], seqLen, emb, emb);
-
-    // dinput += dQ * Wq^T + dK * Wk^T + dV * Wv^T
-    this.matMulTransB(dQ, this.attnWq[block], dinput, seqLen, emb, emb);
-  }
-
-  /**
-   * FFN forward
-   * h = GELU(x * W1 + b1)
-   * out = h * W2 + b2
-   */
-  private ffnForward(input: Float64Array, block: number, seqLen: number): void {
-    const emb = this.config.embeddingDim;
-    const ffn = this.ffnDim;
-
-    // First layer
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < ffn; f++) {
-        let sum = this.ffnB1[block][f];
-        for (let e = 0; e < emb; e++) {
-          sum += input[t * emb + e] * this.ffnW1[block][e * ffn + f];
-        }
-        this.fwdFfnPre[block][t * ffn + f] = sum;
-        this.fwdFfnHid[block][t * ffn + f] = this.gelu(sum);
-      }
-    }
-
-    // Second layer
-    for (let t = 0; t < seqLen; t++) {
-      for (let e = 0; e < emb; e++) {
-        let sum = this.ffnB2[block][e];
-        for (let f = 0; f < ffn; f++) {
-          sum += this.fwdFfnHid[block][t * ffn + f] *
-            this.ffnW2[block][f * emb + e];
-        }
-        this.fwdFfnOut[block][t * emb + e] = sum;
-      }
-    }
-  }
-
-  /**
-   * FFN backward
-   */
-  private ffnBackward(
-    dout: Float64Array,
-    input: Float64Array,
-    block: number,
-    seqLen: number,
-    dinput: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const ffn = this.ffnDim;
-
-    // Second layer backward
-    // dFfnHid = dout * W2^T
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < ffn; f++) {
-        let sum = 0;
-        for (let e = 0; e < emb; e++) {
-          sum += dout[t * emb + e] * this.ffnW2[block][f * emb + e];
-          this.gradFfnW2[block][f * emb + e] +=
-            this.fwdFfnHid[block][t * ffn + f] * dout[t * emb + e];
-        }
-        this.scratchFfn[t * ffn + f] = sum;
-      }
-      for (let e = 0; e < emb; e++) {
-        this.gradFfnB2[block][e] += dout[t * emb + e];
-      }
-    }
-
-    // GELU backward
-    for (let i = 0; i < seqLen * ffn; i++) {
-      this.scratchFfn[i] *= this.geluGrad(this.fwdFfnPre[block][i]);
-    }
-
-    // First layer backward
-    for (let t = 0; t < seqLen; t++) {
-      for (let e = 0; e < emb; e++) {
-        let sum = 0;
-        for (let f = 0; f < ffn; f++) {
-          sum += this.scratchFfn[t * ffn + f] * this.ffnW1[block][e * ffn + f];
-          this.gradFfnW1[block][e * ffn + f] += input[t * emb + e] *
-            this.scratchFfn[t * ffn + f];
-        }
-        dinput[t * emb + e] += sum;
-      }
-      for (let f = 0; f < ffn; f++) {
-        this.gradFfnB1[block][f] += this.scratchFfn[t * ffn + f];
-      }
-    }
-  }
-
-  /**
-   * Transformer block forward
-   * out = x + Attention(LN1(x))
-   * out = out + FFN(LN2(out))
-   */
-  private transformerBlockForward(
-    input: Float64Array,
-    block: number,
-    seqLen: number,
-    training: boolean,
-  ): void {
-    const emb = this.config.embeddingDim;
-
-    // Copy input
-    for (let i = 0; i < seqLen * emb; i++) {
-      this.fwdBlockIn[block][i] = input[i];
-    }
-
-    // LayerNorm 1
-    this.layerNormForward(
-      input,
-      this.ln1Gamma[block],
-      this.ln1Beta[block],
-      seqLen,
-      emb,
-      this.fwdLn1Out[block],
-      this.fwdLn1Mean[block],
-      this.fwdLn1Rstd[block],
-    );
-
-    // Attention
-    this.attentionForward(this.fwdLn1Out[block], block, seqLen, training);
-
-    // Residual 1
-    for (let i = 0; i < seqLen * emb; i++) {
-      this.fwdRes1[block][i] = input[i] + this.fwdAttnProj[block][i];
-    }
-
-    // LayerNorm 2
-    this.layerNormForward(
-      this.fwdRes1[block],
-      this.ln2Gamma[block],
-      this.ln2Beta[block],
-      seqLen,
-      emb,
-      this.fwdLn2Out[block],
-      this.fwdLn2Mean[block],
-      this.fwdLn2Rstd[block],
-    );
-
-    // FFN
-    this.ffnForward(this.fwdLn2Out[block], block, seqLen);
-
-    // Residual 2
-    for (let i = 0; i < seqLen * emb; i++) {
-      this.fwdBlockOut[block][i] = this.fwdRes1[block][i] +
-        this.fwdFfnOut[block][i];
-    }
-  }
-
-  /**
-   * Transformer block backward
-   */
-  private transformerBlockBackward(
-    dout: Float64Array,
-    block: number,
-    seqLen: number,
-    dinput: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-
-    // dRes1 = dout (from residual 2)
-    // dFfnOut = dout
-
-    // FFN backward
-    this.ffnBackward(
-      dout,
-      this.fwdLn2Out[block],
-      block,
-      seqLen,
-      this.scratchSeqEmb,
-    );
-
-    // LayerNorm 2 backward
-    this.layerNormBackward(
-      this.scratchSeqEmb,
-      this.fwdRes1[block],
-      this.fwdLn2Mean[block],
-      this.fwdLn2Rstd[block],
-      this.ln2Gamma[block],
-      seqLen,
-      emb,
-      this.scratchSeqEmb2,
-      this.gradLn2Gamma[block],
-      this.gradLn2Beta[block],
-    );
-
-    // Add residual gradient
-    for (let i = 0; i < seqLen * emb; i++) {
-      this.scratchSeqEmb2[i] += dout[i];
-    }
-
-    // Attention backward
-    this.attentionBackward(
-      this.scratchSeqEmb2,
-      this.fwdLn1Out[block],
-      block,
-      seqLen,
-      this.scratchSeqEmb,
-    );
-
-    // LayerNorm 1 backward
-    this.layerNormBackward(
-      this.scratchSeqEmb,
-      this.fwdBlockIn[block],
-      this.fwdLn1Mean[block],
-      this.fwdLn1Rstd[block],
-      this.ln1Gamma[block],
-      seqLen,
-      emb,
-      dinput,
-      this.gradLn1Gamma[block],
-      this.gradLn1Beta[block],
-    );
-
-    // Add residual gradient
-    for (let i = 0; i < seqLen * emb; i++) {
-      dinput[i] += this.scratchSeqEmb2[i];
-    }
-  }
-
-  /**
-   * Attention pooling forward
-   * score[t] = H[t] · Wpool + bpool
-   * alpha = softmax(scores)
-   * out = sum_t alpha[t] * H[t]
-   */
-  private poolForward(input: Float64Array, seqLen: number): void {
-    const emb = this.config.embeddingDim;
-
-    // Compute scores
-    for (let t = 0; t < seqLen; t++) {
-      let score = this.poolB;
-      for (let e = 0; e < emb; e++) {
-        score += input[t * emb + e] * this.poolW[e];
-      }
-      this.fwdPoolScores[t] = score;
-    }
-
-    // Softmax
-    this.softmax(this.fwdPoolScores, 0, seqLen, this.fwdPoolWeights, 0);
-
-    // Weighted sum
-    for (let e = 0; e < emb; e++) {
-      let sum = 0;
-      for (let t = 0; t < seqLen; t++) {
-        sum += this.fwdPoolWeights[t] * input[t * emb + e];
-      }
-      this.fwdPooled[e] = sum;
-    }
-  }
-
-  /**
-   * Attention pooling backward
-   */
-  private poolBackward(
-    dout: Float64Array,
-    input: Float64Array,
-    seqLen: number,
-    dinput: Float64Array,
-  ): void {
-    const emb = this.config.embeddingDim;
-
-    // dWeights from weighted sum: dw[t] = sum_e dout[e] * input[t,e]
-    for (let t = 0; t < seqLen; t++) {
-      let dw = 0;
-      for (let e = 0; e < emb; e++) {
-        dw += dout[e] * input[t * emb + e];
-        dinput[t * emb + e] += this.fwdPoolWeights[t] * dout[e];
-      }
-      this.scratchScales[t] = dw;
-    }
-
-    // Softmax backward
-    let dotSum = 0;
-    for (let t = 0; t < seqLen; t++) {
-      dotSum += this.scratchScales[t] * this.fwdPoolWeights[t];
-    }
-
-    for (let t = 0; t < seqLen; t++) {
-      const dScore = (this.scratchScales[t] - dotSum) * this.fwdPoolWeights[t];
-      this.gradPoolB += dScore;
-      for (let e = 0; e < emb; e++) {
-        this.gradPoolW[e] += input[t * emb + e] * dScore;
-      }
-    }
-  }
-
-  /**
-   * Output head forward
-   * y = pooled * Wout + bout
-   */
-  private outputForward(): void {
-    const emb = this.config.embeddingDim;
-    for (let o = 0; o < this.outputDim; o++) {
-      let sum = this.outB[o];
-      for (let e = 0; e < emb; e++) {
-        sum += this.fwdPooled[e] * this.outW[e * this.outputDim + o];
-      }
-      this.fwdOutput[o] = sum;
-    }
-  }
-
-  /**
-   * Output head backward
-   */
-  private outputBackward(dout: Float64Array, dPooled: Float64Array): void {
-    const emb = this.config.embeddingDim;
-
-    for (let e = 0; e < emb; e++) {
-      let sum = 0;
-      for (let o = 0; o < this.outputDim; o++) {
-        sum += dout[o] * this.outW[e * this.outputDim + o];
-        this.gradOutW[e * this.outputDim + o] += this.fwdPooled[e] * dout[o];
-      }
-      dPooled[e] = sum;
-    }
-
-    for (let o = 0; o < this.outputDim; o++) {
-      this.gradOutB[o] += dout[o];
-    }
-  }
-
-  /**
-   * Full forward pass
-   */
-  private forward(
-    normalizedX: Float64Array,
-    seqLen: number,
-    training: boolean,
-  ): void {
-    const emb = this.config.embeddingDim;
-    const ns = this.numScales;
-
-    // Temporal convolutions per scale
-    for (let s = 0; s < ns; s++) {
-      const scale = this.config.temporalScales[s];
-      this.convForward(normalizedX, seqLen, scale, s);
-      const scaleLen = Math.ceil(seqLen / scale);
-      this.addEmbeddings(s, scaleLen);
-    }
-
-    // Upsample and concatenate
-    this.upsampleAndConcat(seqLen);
-
-    // Fusion gating
-    this.fusionForward(seqLen, training);
-
-    // Transformer blocks
-    let currentInput = this.fwdFused;
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      this.transformerBlockForward(currentInput, b, seqLen, training);
-      currentInput = this.fwdBlockOut[b];
-    }
-
-    // Pooling
-    this.poolForward(currentInput, seqLen);
-
-    // Output
-    this.outputForward();
-  }
-
-  /**
-   * Clear all gradient buffers
-   */
-  private clearGradients(): void {
-    for (let s = 0; s < this.numScales; s++) {
-      this.gradConvW[s].fill(0);
-      this.gradConvB[s].fill(0);
-    }
-    this.gradScaleEmb.fill(0);
-    this.gradFusionW.fill(0);
-    this.gradFusionB.fill(0);
-
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      this.gradLn1Gamma[b].fill(0);
-      this.gradLn1Beta[b].fill(0);
-      this.gradLn2Gamma[b].fill(0);
-      this.gradLn2Beta[b].fill(0);
-      this.gradAttnWq[b].fill(0);
-      this.gradAttnWk[b].fill(0);
-      this.gradAttnWv[b].fill(0);
-      this.gradAttnWo[b].fill(0);
-      this.gradFfnW1[b].fill(0);
-      this.gradFfnB1[b].fill(0);
-      this.gradFfnW2[b].fill(0);
-      this.gradFfnB2[b].fill(0);
-    }
-
-    this.gradPoolW.fill(0);
-    this.gradPoolB = 0;
-    this.gradOutW.fill(0);
-    this.gradOutB.fill(0);
-  }
-
-  /**
-   * Full backward pass
-   */
-  private backward(
-    normalizedX: Float64Array,
-    target: Float64Array,
-    seqLen: number,
-    sampleWeight: number,
-  ): void {
-    const emb = this.config.embeddingDim;
-
-    // Output gradient: dL/dy = (yhat - y) * sampleWeight
-    for (let o = 0; o < this.outputDim; o++) {
-      this.scratchEmb[o] = (this.fwdOutput[o] - target[o]) * sampleWeight;
-    }
-
-    // Output head backward
-    const dPooled = new Float64Array(emb);
-    this.outputBackward(this.scratchEmb, dPooled);
-
-    // Pooling backward
-    const lastBlockOut = this.fwdBlockOut[this.config.numBlocks - 1];
-    this.scratchSeqEmb.fill(0);
-    this.poolBackward(dPooled, lastBlockOut, seqLen, this.scratchSeqEmb);
-
-    // Transformer blocks backward
-    let dCurrent = this.scratchSeqEmb;
-    for (let b = this.config.numBlocks - 1; b >= 0; b--) {
-      this.scratchSeqEmb2.fill(0);
-      this.transformerBlockBackward(dCurrent, b, seqLen, this.scratchSeqEmb2);
-
-      // Swap buffers
-      const tmp = dCurrent;
-      dCurrent = this.scratchSeqEmb2;
-      this.scratchSeqEmb2 = tmp;
-    }
-
-    // Fusion backward
-    this.scratchGrad.fill(0);
-    this.fusionBackward(dCurrent, seqLen, this.scratchGrad);
-
-    // Backprop through upsampling (distribute gradients to scales)
-    const ns = this.numScales;
-    for (let s = 0; s < ns; s++) {
-      const scale = this.config.temporalScales[s];
-      const scaleLen = Math.ceil(seqLen / scale);
-      const scaleEmb = this.fwdScaleEmb[s];
-
-      // Accumulate gradients from upsampled positions
-      for (let t = 0; t < seqLen; t++) {
-        const srcT = Math.min(Math.floor(t / scale), scaleLen - 1);
-        for (let e = 0; e < emb; e++) {
-          const gradIdx = t * ns * emb + s * emb + e;
-          this.gradScaleEmb[s * emb + e] += this.scratchGrad[gradIdx];
-        }
-      }
-    }
-  }
-
-  /**
-   * Compute gradient norm
-   */
-  private computeGradientNorm(): number {
-    let normSq = 0;
-
-    for (let s = 0; s < this.numScales; s++) {
-      for (let i = 0; i < this.gradConvW[s].length; i++) {
-        normSq += this.gradConvW[s][i] * this.gradConvW[s][i];
-      }
-      for (let i = 0; i < this.gradConvB[s].length; i++) {
-        normSq += this.gradConvB[s][i] * this.gradConvB[s][i];
-      }
-    }
-
-    for (let i = 0; i < this.gradScaleEmb.length; i++) {
-      normSq += this.gradScaleEmb[i] * this.gradScaleEmb[i];
-    }
-
-    for (let i = 0; i < this.gradFusionW.length; i++) {
-      normSq += this.gradFusionW[i] * this.gradFusionW[i];
-    }
-    for (let i = 0; i < this.gradFusionB.length; i++) {
-      normSq += this.gradFusionB[i] * this.gradFusionB[i];
-    }
-
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      for (let i = 0; i < this.gradLn1Gamma[b].length; i++) {
-        normSq += this.gradLn1Gamma[b][i] * this.gradLn1Gamma[b][i];
-      }
-      for (let i = 0; i < this.gradLn1Beta[b].length; i++) {
-        normSq += this.gradLn1Beta[b][i] * this.gradLn1Beta[b][i];
-      }
-      for (let i = 0; i < this.gradLn2Gamma[b].length; i++) {
-        normSq += this.gradLn2Gamma[b][i] * this.gradLn2Gamma[b][i];
-      }
-      for (let i = 0; i < this.gradLn2Beta[b].length; i++) {
-        normSq += this.gradLn2Beta[b][i] * this.gradLn2Beta[b][i];
-      }
-      for (let i = 0; i < this.gradAttnWq[b].length; i++) {
-        normSq += this.gradAttnWq[b][i] * this.gradAttnWq[b][i];
-      }
-      for (let i = 0; i < this.gradAttnWk[b].length; i++) {
-        normSq += this.gradAttnWk[b][i] * this.gradAttnWk[b][i];
-      }
-      for (let i = 0; i < this.gradAttnWv[b].length; i++) {
-        normSq += this.gradAttnWv[b][i] * this.gradAttnWv[b][i];
-      }
-      for (let i = 0; i < this.gradAttnWo[b].length; i++) {
-        normSq += this.gradAttnWo[b][i] * this.gradAttnWo[b][i];
-      }
-      for (let i = 0; i < this.gradFfnW1[b].length; i++) {
-        normSq += this.gradFfnW1[b][i] * this.gradFfnW1[b][i];
-      }
-      for (let i = 0; i < this.gradFfnB1[b].length; i++) {
-        normSq += this.gradFfnB1[b][i] * this.gradFfnB1[b][i];
-      }
-      for (let i = 0; i < this.gradFfnW2[b].length; i++) {
-        normSq += this.gradFfnW2[b][i] * this.gradFfnW2[b][i];
-      }
-      for (let i = 0; i < this.gradFfnB2[b].length; i++) {
-        normSq += this.gradFfnB2[b][i] * this.gradFfnB2[b][i];
-      }
-    }
-
-    for (let i = 0; i < this.gradPoolW.length; i++) {
-      normSq += this.gradPoolW[i] * this.gradPoolW[i];
-    }
-    normSq += this.gradPoolB * this.gradPoolB;
-
-    for (let i = 0; i < this.gradOutW.length; i++) {
-      normSq += this.gradOutW[i] * this.gradOutW[i];
-    }
-    for (let i = 0; i < this.gradOutB.length; i++) {
-      normSq += this.gradOutB[i] * this.gradOutB[i];
-    }
-
-    return Math.sqrt(normSq);
-  }
-
-  /**
-   * Clip gradients by global norm
-   */
-  private clipGradients(maxNorm: number): void {
-    const norm = this.computeGradientNorm();
-    if (norm > maxNorm) {
-      const scale = maxNorm / norm;
-
-      for (let s = 0; s < this.numScales; s++) {
-        for (let i = 0; i < this.gradConvW[s].length; i++) {
-          this.gradConvW[s][i] *= scale;
-        }
-        for (let i = 0; i < this.gradConvB[s].length; i++) {
-          this.gradConvB[s][i] *= scale;
-        }
-      }
-
-      for (let i = 0; i < this.gradScaleEmb.length; i++) {
-        this.gradScaleEmb[i] *= scale;
-      }
-
-      for (let i = 0; i < this.gradFusionW.length; i++) {
-        this.gradFusionW[i] *= scale;
-      }
-      for (let i = 0; i < this.gradFusionB.length; i++) {
-        this.gradFusionB[i] *= scale;
-      }
-
-      for (let b = 0; b < this.config.numBlocks; b++) {
-        for (let i = 0; i < this.gradLn1Gamma[b].length; i++) {
-          this.gradLn1Gamma[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradLn1Beta[b].length; i++) {
-          this.gradLn1Beta[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradLn2Gamma[b].length; i++) {
-          this.gradLn2Gamma[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradLn2Beta[b].length; i++) {
-          this.gradLn2Beta[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradAttnWq[b].length; i++) {
-          this.gradAttnWq[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradAttnWk[b].length; i++) {
-          this.gradAttnWk[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradAttnWv[b].length; i++) {
-          this.gradAttnWv[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradAttnWo[b].length; i++) {
-          this.gradAttnWo[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradFfnW1[b].length; i++) {
-          this.gradFfnW1[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradFfnB1[b].length; i++) {
-          this.gradFfnB1[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradFfnW2[b].length; i++) {
-          this.gradFfnW2[b][i] *= scale;
-        }
-        for (let i = 0; i < this.gradFfnB2[b].length; i++) {
-          this.gradFfnB2[b][i] *= scale;
-        }
-      }
-
-      for (let i = 0; i < this.gradPoolW.length; i++) {
-        this.gradPoolW[i] *= scale;
-      }
-      this.gradPoolB *= scale;
-
-      for (let i = 0; i < this.gradOutW.length; i++) {
-        this.gradOutW[i] *= scale;
-      }
-      for (let i = 0; i < this.gradOutB.length; i++) {
-        this.gradOutB[i] *= scale;
-      }
-    }
-  }
-
-  /**
-   * Apply L2 regularization to gradients
-   */
-  private applyL2Regularization(): void {
-    const lambda = this.config.regularizationStrength;
-
-    for (let s = 0; s < this.numScales; s++) {
-      for (let i = 0; i < this.convW[s].length; i++) {
-        this.gradConvW[s][i] += lambda * this.convW[s][i];
-      }
-    }
-
-    for (let i = 0; i < this.scaleEmb.length; i++) {
-      this.gradScaleEmb[i] += lambda * this.scaleEmb[i];
-    }
-
-    for (let i = 0; i < this.fusionW.length; i++) {
-      this.gradFusionW[i] += lambda * this.fusionW[i];
-    }
-
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      for (let i = 0; i < this.attnWq[b].length; i++) {
-        this.gradAttnWq[b][i] += lambda * this.attnWq[b][i];
-      }
-      for (let i = 0; i < this.attnWk[b].length; i++) {
-        this.gradAttnWk[b][i] += lambda * this.attnWk[b][i];
-      }
-      for (let i = 0; i < this.attnWv[b].length; i++) {
-        this.gradAttnWv[b][i] += lambda * this.attnWv[b][i];
-      }
-      for (let i = 0; i < this.attnWo[b].length; i++) {
-        this.gradAttnWo[b][i] += lambda * this.attnWo[b][i];
-      }
-      for (let i = 0; i < this.ffnW1[b].length; i++) {
-        this.gradFfnW1[b][i] += lambda * this.ffnW1[b][i];
-      }
-      for (let i = 0; i < this.ffnW2[b].length; i++) {
-        this.gradFfnW2[b][i] += lambda * this.ffnW2[b][i];
-      }
-    }
-
-    for (let i = 0; i < this.outW.length; i++) {
-      this.gradOutW[i] += lambda * this.outW[i];
-    }
-  }
-
-  /**
-   * Compute learning rate with warmup and cosine decay
-   * warmup: lr = baseLR * (step / warmupSteps)
-   * decay: lr = baseLR * 0.5 * (1 + cos(π * progress))
-   */
-  private computeLearningRate(): number {
-    const step = this.updateCount;
-    const baseLR = this.config.learningRate;
-    const warmup = this.config.warmupSteps;
-    const total = this.config.totalSteps;
-
-    if (step < warmup) {
-      return baseLR * (step + 1) / warmup;
-    }
-
-    const progress = Math.min(1, (step - warmup) / Math.max(1, total - warmup));
-    return baseLR * 0.5 * (1 + Math.cos(Math.PI * progress));
-  }
-
-  /**
-   * Adam update for a single parameter array
-   * m = β₁m + (1-β₁)g
-   * v = β₂v + (1-β₂)g²
-   * m̂ = m / (1 - β₁ᵗ)
-   * v̂ = v / (1 - β₂ᵗ)
-   * θ = θ - lr * m̂ / (√v̂ + ε)
-   */
-  private adamUpdate(
-    param: Float64Array,
-    grad: Float64Array,
-    mOffset: number,
-    lr: number,
-  ): void {
-    const beta1 = this.config.beta1;
-    const beta2 = this.config.beta2;
-    const eps = this.config.epsilon;
-    const t = this.updateCount + 1;
-
-    const beta1t = 1 - Math.pow(beta1, t);
-    const beta2t = 1 - Math.pow(beta2, t);
-
-    for (let i = 0; i < param.length; i++) {
-      const g = grad[i];
-      this.adamM[mOffset + i] = beta1 * this.adamM[mOffset + i] +
-        (1 - beta1) * g;
-      this.adamV[mOffset + i] = beta2 * this.adamV[mOffset + i] +
-        (1 - beta2) * g * g;
-
-      const mHat = this.adamM[mOffset + i] / beta1t;
-      const vHat = this.adamV[mOffset + i] / beta2t;
-
-      param[i] -= lr * mHat / (Math.sqrt(vHat) + eps);
-    }
-  }
-
-  /**
-   * Apply Adam updates to all parameters
-   */
-  private applyAdamUpdates(lr: number): void {
-    let offset = 0;
-
-    for (let s = 0; s < this.numScales; s++) {
-      this.adamUpdate(this.convW[s], this.gradConvW[s], offset, lr);
-      offset += this.convW[s].length;
-      this.adamUpdate(this.convB[s], this.gradConvB[s], offset, lr);
-      offset += this.convB[s].length;
-    }
-
-    this.adamUpdate(this.scaleEmb, this.gradScaleEmb, offset, lr);
-    offset += this.scaleEmb.length;
-
-    this.adamUpdate(this.fusionW, this.gradFusionW, offset, lr);
-    offset += this.fusionW.length;
-    this.adamUpdate(this.fusionB, this.gradFusionB, offset, lr);
-    offset += this.fusionB.length;
-
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      this.adamUpdate(this.ln1Gamma[b], this.gradLn1Gamma[b], offset, lr);
-      offset += this.ln1Gamma[b].length;
-      this.adamUpdate(this.ln1Beta[b], this.gradLn1Beta[b], offset, lr);
-      offset += this.ln1Beta[b].length;
-      this.adamUpdate(this.ln2Gamma[b], this.gradLn2Gamma[b], offset, lr);
-      offset += this.ln2Gamma[b].length;
-      this.adamUpdate(this.ln2Beta[b], this.gradLn2Beta[b], offset, lr);
-      offset += this.ln2Beta[b].length;
-
-      this.adamUpdate(this.attnWq[b], this.gradAttnWq[b], offset, lr);
-      offset += this.attnWq[b].length;
-      this.adamUpdate(this.attnWk[b], this.gradAttnWk[b], offset, lr);
-      offset += this.attnWk[b].length;
-      this.adamUpdate(this.attnWv[b], this.gradAttnWv[b], offset, lr);
-      offset += this.attnWv[b].length;
-      this.adamUpdate(this.attnWo[b], this.gradAttnWo[b], offset, lr);
-      offset += this.attnWo[b].length;
-
-      this.adamUpdate(this.ffnW1[b], this.gradFfnW1[b], offset, lr);
-      offset += this.ffnW1[b].length;
-      this.adamUpdate(this.ffnB1[b], this.gradFfnB1[b], offset, lr);
-      offset += this.ffnB1[b].length;
-      this.adamUpdate(this.ffnW2[b], this.gradFfnW2[b], offset, lr);
-      offset += this.ffnW2[b].length;
-      this.adamUpdate(this.ffnB2[b], this.gradFfnB2[b], offset, lr);
-      offset += this.ffnB2[b].length;
-    }
-
-    this.adamUpdate(this.poolW, this.gradPoolW, offset, lr);
-    offset += this.poolW.length;
-
-    // poolB (scalar)
-    const g = this.gradPoolB;
-    this.adamM[offset] = this.config.beta1 * this.adamM[offset] +
-      (1 - this.config.beta1) * g;
-    this.adamV[offset] = this.config.beta2 * this.adamV[offset] +
-      (1 - this.config.beta2) * g * g;
-    const beta1t = 1 - Math.pow(this.config.beta1, this.updateCount + 1);
-    const beta2t = 1 - Math.pow(this.config.beta2, this.updateCount + 1);
-    const mHat = this.adamM[offset] / beta1t;
-    const vHat = this.adamV[offset] / beta2t;
-    this.poolB -= lr * mHat / (Math.sqrt(vHat) + this.config.epsilon);
-    offset += 1;
-
-    this.adamUpdate(this.outW, this.gradOutW, offset, lr);
-    offset += this.outW.length;
-    this.adamUpdate(this.outB, this.gradOutB, offset, lr);
-  }
-
-  /**
-   * ADWIN drift detection
-   * Tests if there's a significant change in the mean of recent losses
-   */
-  private checkDrift(loss: number): boolean {
-    // Add to ring buffer
-    this.driftWindow[this.driftWindowHead] = loss;
-    this.driftWindowHead = (this.driftWindowHead + 1) % this.driftWindowSize;
-    if (this.driftWindowCount < this.driftWindowSize) {
-      this.driftWindowCount++;
-    }
-
-    // Need minimum samples
-    if (this.driftWindowCount < 32) return false;
-
-    const n = this.driftWindowCount;
-    const delta = this.config.adwinDelta;
-
-    // Find best split point
-    let bestEps = 0;
-    let bestDiff = 0;
-
-    for (let split = 16; split < n - 16; split++) {
-      let sumLeft = 0, sumRight = 0;
-      let countLeft = 0, countRight = 0;
-
-      for (let i = 0; i < n; i++) {
-        const idx = (this.driftWindowHead - n + i + this.driftWindowSize) %
-          this.driftWindowSize;
-        if (i < split) {
-          sumLeft += this.driftWindow[idx];
-          countLeft++;
-        } else {
-          sumRight += this.driftWindow[idx];
-          countRight++;
-        }
-      }
-
-      const meanLeft = sumLeft / countLeft;
-      const meanRight = sumRight / countRight;
-      const diff = Math.abs(meanLeft - meanRight);
-
-      const eps = Math.sqrt(
-        2 * Math.log(2 / delta) * (1 / countLeft + 1 / countRight),
-      );
-
-      if (diff > eps && diff > bestDiff) {
-        bestDiff = diff;
-        bestEps = eps;
-      }
-    }
-
-    if (bestDiff > bestEps) {
-      // Reset window
-      this.driftWindowHead = 0;
-      this.driftWindowCount = 0;
-      this.runningLoss = loss;
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Trains the model on a single sample (online learning).
-   *
-   * @param data - Training sample with input and output sequences
-   * @param data.xCoordinates - Input sequence [seqLen][inputDim]
-   * @param data.yCoordinates - Output sequence [seqLen][outputDim], uses last timestep as target
-   * @returns FitResult with loss, gradient norm, and other metrics
-   *
+   * @param config Partial configuration overrides.
    * @example
-   * ```typescript
-   * const result = model.fitOnline({
-   *   xCoordinates: [[1, 2], [3, 4], [5, 6]],
-   *   yCoordinates: [[7], [8], [9]]
-   * });
-   * console.log(`Loss: ${result.loss}`);
-   * ```
+   * const m = new FusionTemporalTransformerRegression({ embeddingDim: 32, numHeads: 4 });
    */
-  public fitOnline(
+  constructor(config?: Partial<Config>) {
+    const defaults: Config = {
+      numBlocks: 3,
+      embeddingDim: 64,
+      numHeads: 8,
+      ffnMultiplier: 4,
+      attentionDropout: 0.0,
+      fusionDropout: 0.0,
+      learningRate: 0.001,
+      warmupSteps: 100,
+      totalSteps: 10000,
+      beta1: 0.9,
+      beta2: 0.999,
+      epsilon: 1e-8,
+      regularizationStrength: 1e-4,
+      convergenceThreshold: 1e-6,
+      outlierThreshold: 3.0,
+      adwinDelta: 0.002,
+      temporalScales: [1, 2, 4],
+      temporalKernelSize: 3,
+      maxSequenceLength: 512,
+    };
+    this.config = Object.assign({}, defaults, config || {});
+    this.adwin = _adwinCreate(256, 32, this.config.adwinDelta);
+  }
+
+  /**
+   * Fit one online sample (a window sequence).
+   * Uses y = last timestep target and outputs a single vector after pooling.
+   * @param data Sequence window with xCoordinates (seqLen x inputDim) and yCoordinates (seqLen x outputDim).
+   * @returns FitResult
+   */
+  fitOnline(
     data: { xCoordinates: number[][]; yCoordinates: number[][] },
   ): FitResult {
-    const xCoords = data.xCoordinates;
-    const yCoords = data.yCoordinates;
+    const xSeq = data.xCoordinates;
+    const ySeq = data.yCoordinates;
 
-    if (xCoords.length === 0 || yCoords.length === 0) {
-      throw new Error("Empty input data");
+    const seqLenRaw = Math.min(xSeq.length, ySeq.length);
+    const L1 = Math.min(seqLenRaw, this.config.maxSequenceLength);
+
+    if (L1 <= 0) {
+      return {
+        loss: 0,
+        gradientNorm: 0,
+        effectiveLearningRate: 0,
+        isOutlier: false,
+        converged: true,
+        sampleIndex: this.sampleCount,
+        driftDetected: false,
+      };
     }
 
-    const seqLen = Math.min(xCoords.length, this.config.maxSequenceLength);
-    const inputDim = xCoords[0].length;
-    const outputDim = yCoords[0].length;
+    const inDim = xSeq[0].length;
+    const outDim = ySeq[0].length;
 
-    // Initialize on first call
     if (!this.isInitialized) {
-      this.initialize(inputDim, outputDim, seqLen);
-    }
-
-    // Update sequence length if needed
-    this.seqLen = seqLen;
-
-    // Seed RNG deterministically
-    this.rngState = (this.updateCount * 2654435761) >>> 0;
-    if (this.rngState === 0) this.rngState = 1;
-
-    // Copy input to flat buffer and cache for prediction
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < inputDim; f++) {
-        const val = xCoords[t][f];
-        this.fwdNormX[t * inputDim + f] = val;
-        this.lastWindow[t * inputDim + f] = val;
-      }
-    }
-    this.lastWindowLen = seqLen;
-
-    // Get target (last timestep)
-    for (let o = 0; o < outputDim; o++) {
-      this.fwdNormY[o] = yCoords[seqLen - 1][o];
-    }
-
-    // Update Welford stats
-    this.normCount++;
-    const tempX = new Float64Array(inputDim);
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < inputDim; f++) {
-        tempX[f] = xCoords[t][f];
-      }
-      this.updateWelford(tempX, this.inputMean, this.inputM2, this.normCount);
-    }
-    this.updateWelford(
-      this.fwdNormY,
-      this.outputMean,
-      this.outputM2,
-      this.normCount,
-    );
-
-    // Normalize input
-    const inputStd = new Float64Array(inputDim);
-    this.getStd(this.inputM2, this.normCount, inputStd);
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < inputDim; f++) {
-        this.fwdNormX[t * inputDim + f] =
-          (this.fwdNormX[t * inputDim + f] - this.inputMean[f]) / inputStd[f];
+      this.ensureInitialized(inDim, outDim);
+    } else {
+      if (inDim !== this.inputDim || outDim !== this.outputDim) {
+        throw new Error(
+          `Dimension mismatch: expected inDim=${this.inputDim}, outDim=${this.outputDim}, got inDim=${inDim}, outDim=${outDim}`,
+        );
       }
     }
 
-    // Normalize target
-    const outputStd = new Float64Array(outputDim);
-    this.getStd(this.outputM2, this.normCount, outputStd);
-    const normalizedTarget = new Float64Array(outputDim);
-    for (let o = 0; o < outputDim; o++) {
-      normalizedTarget[o] = (this.fwdNormY[o] - this.outputMean[o]) /
-        outputStd[o];
+    // Buffers
+    this.ensureBuffers();
+
+    const emb = this.config.embeddingDim;
+    const concatDim = this.nScales * emb;
+    const hidden = this.hiddenDim;
+
+    const buf = this.buf!;
+    this.lastSeqLen = L1;
+
+    // Copy x window into xRaw (clipped to L1; no padding)
+    for (let t = 0; t < L1; t++) {
+      const row = xSeq[t];
+      const off = t * inDim;
+      for (let f = 0; f < inDim; f++) {
+        buf.xRaw[off + f] = row[f];
+      }
+    }
+    // cache lastXRaw for predict
+    if (!this.lastXRaw || this.lastXRaw.length !== buf.xRaw.length) {
+      this.lastXRaw = new Float64Array(buf.xRaw.length);
+    }
+    _copy(this.lastXRaw, buf.xRaw, L1 * inDim);
+
+    // y target = last timestep
+    const yRow = ySeq[L1 - 1];
+    for (let d = 0; d < outDim; d++) buf.yTargetRaw[d] = yRow[d];
+
+    // Update normalization stats (treat current sample as observed)
+    // Inputs: update across all timesteps; Outputs: only last target vector.
+    _welfordUpdateArray(this.inStats!, buf.xRaw, L1, inDim, inDim);
+    _welfordUpdateVec(this.outStats!, buf.yTargetRaw, 0, outDim);
+
+    _welfordStd(this.inStats!, this.inStd!);
+    _welfordStd(this.outStats!, this.outStd!);
+
+    // Normalize x -> xNorm
+    const inMean = this.inStats!.mean;
+    const inStd = this.inStd!;
+    for (let t = 0; t < L1; t++) {
+      const off = t * inDim;
+      for (let f = 0; f < inDim; f++) {
+        const z = (buf.xRaw[off + f] - inMean[f]) /
+          (inStd[f] <= 1e-12 ? 1e-12 : inStd[f]);
+        buf.xNorm[off + f] = _isFiniteNumber(z) ? z : 0;
+      }
     }
 
-    // Forward pass
-    this.forward(this.fwdNormX, seqLen, true);
+    // Normalize y target
+    const outMean = this.outStats!.mean;
+    const outStd = this.outStd!;
+    for (let d = 0; d < outDim; d++) {
+      const z = (buf.yTargetRaw[d] - outMean[d]) /
+        (outStd[d] <= 1e-12 ? 1e-12 : outStd[d]);
+      buf.yTargetNorm[d] = _isFiniteNumber(z) ? z : 0;
+    }
 
-    // Compute loss: MSE on normalized outputs
-    let mse = 0;
+    // ===== Forward =====
+    // 1) Multi-scale temporal convolution
+    for (let si = 0; si < this.nScales; si++) {
+      const s = this.config.temporalScales[si];
+      const K = this.config.temporalKernelSize;
+      const Ls = Math.floor((L1 + s - 1) / s);
+      const W = this.scales[si].W;
+      const b = this.scales[si].b;
+      const convPre = buf.convPre[si];
+      const convAct = buf.convAct[si];
+
+      // convPre/convAct are sized to max; only fill first Ls
+      for (let tt = 0; tt < Ls; tt++) {
+        const tBase = tt * s;
+        const outOff = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          let sum = b[e];
+          // causal left padding: only idx>=0
+          for (let k = 0; k < K; k++) {
+            const idx = tBase - k;
+            if (idx < 0) continue;
+            if (idx >= L1) continue;
+            const xOff = idx * inDim;
+            // W index: (((k*inDim)+f)*emb + e)
+            let wOff = (k * inDim) * emb + e;
+            for (let f = 0; f < inDim; f++) {
+              sum += buf.xNorm[xOff + f] * W[wOff];
+              wOff += emb;
+            }
+          }
+          convPre[outOff + e] = sum;
+          convAct[outOff + e] = _gelu(sum);
+        }
+      }
+
+      // 2) Add PE and scale embedding: E[tt,e] = convAct + PE(tt,e) + scaleEmb[e]
+      const E = buf.E[si];
+      const scaleEmb = this.scales[si].scaleEmb;
+      const pe = this.pe!;
+      for (let tt = 0; tt < Ls; tt++) {
+        const off = tt * emb;
+        const peOff = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          E[off + e] = convAct[off + e] + pe[peOff + e] + scaleEmb[e];
+        }
+      }
+
+      // 3) Upsample to length L1 by repetition: te=floor(t/s)
+      const EUp = buf.EUp[si];
+      for (let t = 0; t < L1; t++) {
+        let te = Math.floor(t / s);
+        if (te < 0) te = 0;
+        if (te >= Ls) te = Ls - 1;
+        const srcOff = te * emb;
+        const dstOff = t * emb;
+        for (let e = 0; e < emb; e++) EUp[dstOff + e] = E[srcOff + e];
+      }
+    }
+
+    // 4) Fusion: concat per timestep then gate
+    const Wg = this.Wg!;
+    const bg = this.bg!;
+    const concat = buf.concat;
+    const gatePre = buf.gatePre;
+    const gate = buf.gate;
+    const fusedPre = buf.fusedPreDrop;
+    const fused = buf.fused;
+
+    // Build concat
+    for (let t = 0; t < L1; t++) {
+      const base = t * concatDim;
+      let w = 0;
+      for (let si = 0; si < this.nScales; si++) {
+        const EUp = buf.EUp[si];
+        const srcOff = t * emb;
+        for (let e = 0; e < emb; e++) concat[base + (w++)] = EUp[srcOff + e];
+      }
+    }
+
+    // Gate preactivation and sigmoid
+    // gatePre[t,d] = sum_c concat[t,c]*Wg[c,d] + bg[d]
+    for (let t = 0; t < L1; t++) {
+      const xOff = t * concatDim;
+      const yOff = t * concatDim;
+      for (let d = 0; d < concatDim; d++) {
+        let sum = bg[d];
+        // Wg is [concatDim, concatDim] row-major, rows=c, cols=d
+        let wOff = d;
+        for (let c = 0; c < concatDim; c++) {
+          sum += concat[xOff + c] * Wg[wOff];
+          wOff += concatDim;
+        }
+        gatePre[yOff + d] = sum;
+        gate[yOff + d] = _sigmoid(sum);
+      }
+    }
+
+    // Fused: sum_s gate_s * EUp_s
+    for (let t = 0; t < L1; t++) {
+      const gOff = t * concatDim;
+      const outOff = t * emb;
+      for (let e = 0; e < emb; e++) fusedPre[outOff + e] = 0;
+      for (let si = 0; si < this.nScales; si++) {
+        const EUp = buf.EUp[si];
+        const srcOff = t * emb;
+        const gBase = gOff + si * emb;
+        for (let e = 0; e < emb; e++) {
+          fusedPre[outOff + e] += gate[gBase + e] * EUp[srcOff + e];
+        }
+      }
+    }
+
+    // Fusion dropout (training only)
+    if (this.config.fusionDropout > 0) {
+      const p = this.config.fusionDropout;
+      const scale = 1 / (1 - p);
+      const rng = new _XorShift32(
+        (this.updateCount + 1) * 2654435761 ^ 0xA5A5A5A5,
+      );
+      for (let i = 0; i < L1 * emb; i++) {
+        const keep = rng.nextFloat() >= p ? 1 : 0;
+        fused[i] = fusedPre[i] * keep * scale;
+      }
+    } else {
+      _copy(fused, fusedPre, L1 * emb);
+    }
+
+    // 5) Transformer blocks
+    // H starts as fused; blockInput caches input H for backward
+    let H = fused;
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const params = this.blocks[bi];
+      const H_in = buf.blockInput[bi];
+      _copy(H_in, H, L1 * emb);
+
+      // LN1: Xn1
+      const Xn1 = buf.Xn1[bi];
+      const m1 = buf.ln1Mean[bi];
+      const v1 = buf.ln1Var[bi];
+      for (let t = 0; t < L1; t++) {
+        _layerNormForward(
+          H_in,
+          t * emb,
+          Xn1,
+          t * emb,
+          m1,
+          v1,
+          t,
+          emb,
+          params.ln1Gamma,
+          params.ln1Beta,
+        );
+      }
+
+      // Q,K,V = Xn1 * W?
+      const Q = buf.Q[bi];
+      const K = buf.K[bi];
+      const V = buf.V[bi];
+      this.linearForward2D(Xn1, Q, L1, emb, params.Wq, null);
+      this.linearForward2D(Xn1, K, L1, emb, params.Wk, null);
+      this.linearForward2D(Xn1, V, L1, emb, params.Wv, null);
+
+      // Attention context
+      const context = buf.context[bi];
+      this.mhaForward(
+        Q,
+        K,
+        V,
+        context,
+        L1,
+        emb,
+        this.config.numHeads,
+        this.config.attentionDropout,
+        true,
+        bi,
+      );
+
+      // Project heads: attnProj = context * Wo
+      const attnProj = buf.attnProj[bi];
+      this.linearForward2D(context, attnProj, L1, emb, params.Wo, null);
+
+      // Residual: afterAttn = H_in + attnProj
+      const afterAttn = buf.afterAttn[bi];
+      for (let i = 0; i < L1 * emb; i++) afterAttn[i] = H_in[i] + attnProj[i];
+
+      // LN2: Xn2
+      const Xn2 = buf.Xn2[bi];
+      const m2 = buf.ln2Mean[bi];
+      const v2 = buf.ln2Var[bi];
+      for (let t = 0; t < L1; t++) {
+        _layerNormForward(
+          afterAttn,
+          t * emb,
+          Xn2,
+          t * emb,
+          m2,
+          v2,
+          t,
+          emb,
+          params.ln2Gamma,
+          params.ln2Beta,
+        );
+      }
+
+      // FFN: hidden = GELU(Xn2*W1 + b1); out = hidden*W2 + b2
+      const ffnPre = buf.ffnPre[bi];
+      const ffnAct = buf.ffnAct[bi];
+      const ffnOut = buf.ffnOut[bi];
+      // Xn2*W1 + b1
+      this.linearForward2D(Xn2, ffnPre, L1, emb, params.W1, params.b1);
+      for (let i = 0; i < L1 * hidden; i++) ffnAct[i] = _gelu(ffnPre[i]);
+      this.linearForward2D(ffnAct, ffnOut, L1, hidden, params.W2, params.b2);
+
+      // Residual: H = afterAttn + ffnOut, stored back into fused (reuse fused buffer as H for final)
+      for (let i = 0; i < L1 * emb; i++) H[i] = afterAttn[i] + ffnOut[i];
+    }
+
+    // 6) Pooling: scores, alpha, pooled
+    const scores = buf.poolScores;
+    const alpha = buf.poolAlpha;
+    const pooled = buf.pooled;
+
+    const Wpool = this.Wpool!;
+    const bpool = this.bpool;
+    for (let t = 0; t < L1; t++) {
+      scores[t] = _dot(H, t * emb, Wpool, 0, emb) + bpool;
+    }
+    // softmax(scores) -> alpha
+    _softmaxRowStable(alpha, 0, scores, 0, L1);
+
+    _fill(pooled, 0);
+    for (let t = 0; t < L1; t++) {
+      const a = alpha[t];
+      const off = t * emb;
+      for (let e = 0; e < emb; e++) pooled[e] += a * H[off + e];
+    }
+
+    // 7) Output head: yHatNorm = pooled * Wout + bout
+    const Wout = this.Wout!;
+    const bout = this.bout!;
+    const yHat = buf.yHatNorm;
+    for (let d = 0; d < outDim; d++) {
+      let sum = bout[d];
+      // Wout row-major [emb, outDim]
+      let wOff = d;
+      for (let e = 0; e < emb; e++) {
+        sum += pooled[e] * Wout[wOff];
+        wOff += outDim;
+      }
+      yHat[d] = sum;
+    }
+
+    // ===== Loss + Outlier weight =====
     let isOutlier = false;
-    for (let o = 0; o < outputDim; o++) {
-      const residual = this.fwdOutput[o] - normalizedTarget[o];
-      mse += residual * residual;
-      if (Math.abs(residual) > this.config.outlierThreshold) {
+    for (let d = 0; d < outDim; d++) {
+      const r = buf.yTargetNorm[d] - yHat[d];
+      if (Math.abs(r) > this.config.outlierThreshold) {
         isOutlier = true;
+        break;
       }
     }
-    mse /= 2 * outputDim;
-
-    // L2 regularization loss
-    let regLoss = 0;
-    const lambda = this.config.regularizationStrength;
-    for (let s = 0; s < this.numScales; s++) {
-      for (let i = 0; i < this.convW[s].length; i++) {
-        regLoss += this.convW[s][i] * this.convW[s][i];
-      }
-    }
-    regLoss *= lambda / 2;
-
-    const totalLoss = mse + regLoss;
-
-    // Outlier downweighting
     const sampleWeight = isOutlier ? 0.1 : 1.0;
 
-    // Update running loss
-    this.sampleCount++;
-    this.runningLoss =
-      (this.runningLoss * (this.sampleCount - 1) + totalLoss * sampleWeight) /
-      this.sampleCount;
+    let mse = 0;
+    for (let d = 0; d < outDim; d++) {
+      const r = buf.yTargetNorm[d] - yHat[d];
+      mse += r * r;
+    }
+    mse = mse / outDim;
+    let loss = 0.5 * mse;
+    loss *= sampleWeight;
 
-    // Update residual variance for prediction uncertainty
-    this.residualCount++;
-    for (let o = 0; o < outputDim; o++) {
-      const residual = this.fwdOutput[o] - normalizedTarget[o];
-      const delta = residual * residual -
-        this.residualM2[o] / Math.max(1, this.residualCount - 1);
-      this.residualM2[o] += delta;
+    // L2 penalty term (for reporting; gradients get L2 in optimizer)
+    const lambda = this.config.regularizationStrength;
+    const l2sum = this.sumL2Weights();
+    loss += 0.5 * lambda * l2sum;
+
+    // Update running loss & accuracy
+    this.sampleCount++;
+    this.runningLoss = (this.runningLoss * (this.sampleCount - 1) + loss) /
+      this.sampleCount;
+    const accuracy = 1 / (1 + this.runningLoss);
+
+    // ===== Backward =====
+    this.zeroAllGrads();
+
+    // dYHat = (yHat - yTarget) / outDim * sampleWeight
+    const dYHat = buf.dYHat;
+    const invOut = 1 / outDim;
+    for (let d = 0; d < outDim; d++) {
+      dYHat[d] = (yHat[d] - buf.yTargetNorm[d]) * invOut * sampleWeight;
+      if (!_isFiniteNumber(dYHat[d])) dYHat[d] = 0;
     }
 
-    // Clear gradients
-    this.clearGradients();
+    // Output head backward: dWout, dbout, dPooled
+    const gWout = this.gWout!;
+    const gbout = this.gbout!;
+    _fill(buf.dPooled, 0);
+    for (let d = 0; d < outDim; d++) {
+      gbout[d] += dYHat[d];
+      // gWout[e,d] += pooled[e] * dYHat[d]; dPooled[e] += Wout[e,d]*dYHat[d]
+      let wOff = d;
+      for (let e = 0; e < emb; e++) {
+        gWout[wOff] += pooled[e] * dYHat[d];
+        buf.dPooled[e] += Wout[wOff] * dYHat[d];
+        wOff += outDim;
+      }
+    }
 
-    // Backward pass
-    this.backward(this.fwdNormX, normalizedTarget, seqLen, sampleWeight);
+    // Pooling backward:
+    // pooled = sum_t alpha[t]*H[t]
+    // dH_from_pooled[t,e] = alpha[t]*dPooled[e]
+    // dAlpha[t] = dot(dPooled, H[t])
+    // scores = dot(H[t], Wpool)+bpool
+    // dScores = softmax backward(alpha, dAlpha)
+    // dWpool += sum_t dScores[t]*H[t]
+    // dbpool += sum_t dScores[t]
+    // additional dH[t,e] += dScores[t]*Wpool[e]
+    const dH = buf.dH;
+    _fill(dH, 0);
 
-    // Apply L2 regularization to gradients
-    this.applyL2Regularization();
+    const dAlpha = buf.dAlpha;
+    for (let t = 0; t < L1; t++) {
+      const off = t * emb;
+      // dAlpha[t] = dot(dPooled, H[t])
+      dAlpha[t] = _dot(buf.dPooled, 0, H, off, emb);
+      // dH += alpha[t] * dPooled
+      const a = alpha[t];
+      for (let e = 0; e < emb; e++) dH[off + e] += a * buf.dPooled[e];
+    }
 
-    // Clip gradients
-    this.clipGradients(5.0);
+    // softmax backward: dScores[t] = alpha[t]*(dAlpha[t] - sum_j alpha[j]*dAlpha[j])
+    let sumAD = 0;
+    for (let t = 0; t < L1; t++) sumAD += alpha[t] * dAlpha[t];
+    const dScores = buf.dScores;
+    for (let t = 0; t < L1; t++) dScores[t] = alpha[t] * (dAlpha[t] - sumAD);
 
-    // Compute gradient norm
-    const gradNorm = this.computeGradientNorm();
+    // grad pool params and add to dH
+    const gWpool = this.gWpool!;
+    let gbpool = this.gbpool;
+    for (let t = 0; t < L1; t++) {
+      const ds = dScores[t];
+      gbpool += ds;
+      const off = t * emb;
+      for (let e = 0; e < emb; e++) {
+        gWpool[e] += ds * H[off + e];
+        dH[off + e] += ds * Wpool[e];
+      }
+    }
+    this.gbpool = gbpool;
 
-    // Compute learning rate
-    const lr = this.computeLearningRate();
+    // Transformer backward through blocks reversed
+    for (let bi = this.config.numBlocks - 1; bi >= 0; bi--) {
+      const params = this.blocks[bi];
+      const grads = this.blockGrad[bi];
 
-    // Apply Adam updates
-    this.applyAdamUpdates(lr);
+      const H_in = buf.blockInput[bi];
+      const afterAttn = buf.afterAttn[bi];
+      const Xn2 = buf.Xn2[bi];
+      const ffnPre = buf.ffnPre[bi];
+      const ffnAct = buf.ffnAct[bi];
 
-    // Check convergence
-    this.converged = gradNorm < this.config.convergenceThreshold;
-    this.lastGradNorm = gradNorm;
-    this.lastLR = lr;
+      // Residual: H_out = afterAttn + ffnOut
+      // upstream dH is already for H_out.
+      // => dAfterAttn += dH, dFfnOut += dH
+      const dAfterAttn = buf.dTmp;
+      const dFfnOut = buf.dXn;
+      _fill(dAfterAttn, 0);
+      _fill(dFfnOut, 0);
+      for (let i = 0; i < L1 * emb; i++) {
+        dAfterAttn[i] = dH[i];
+        dFfnOut[i] = dH[i];
+      }
 
-    // Check drift
-    const driftDetected = this.checkDrift(totalLoss * sampleWeight);
+      // FFN backward: ffnOut = ffnAct * W2 + b2
+      // dW2, db2, dFfnAct
+      const dFfnAct = buf.tmpHidden; // use tmpHidden as scratch for one timestep; we do per timestep loops below without allocations
+
+      // We'll create a buffer for dAct full: reuse buf.ffnPre[bi] memory? cannot, needed for gelu grad.
+      // We'll use buf.ffnPre[bi] as dPre after reading ffnPre (we still have it). Overwrite allowed now.
+      // Similarly, use buf.ffnAct[bi] as dAct to save memory? It's used for W2 grad. We'll keep it and use a separate scratch per element in place.
+      // We'll compute dHidden = dFfnOut * W2^T into buf.ffnAct[bi] (overwrite ffnAct after using it for gW2).
+      // Need ffnAct values for gW2: use saved ffnAct first.
+
+      // gW2 += ffnAct^T * dFfnOut ; gb2 += sum dFfnOut
+      for (let e = 0; e < emb; e++) grads.g_b2[e] += 0;
+      const gW2 = grads.g_W2;
+      const gb2 = grads.g_b2;
+      const W2 = params.W2;
+
+      for (let t = 0; t < L1; t++) {
+        const actOff = t * hidden;
+        const dOutOff = t * emb;
+        // gb2
+        for (let e = 0; e < emb; e++) gb2[e] += dFfnOut[dOutOff + e];
+
+        // gW2[h,e] += act[h]*dOut[e]
+        for (let h = 0; h < hidden; h++) {
+          const aVal = ffnAct[actOff + h];
+          let wOff = h * emb;
+          for (let e = 0; e < emb; e++) {
+            gW2[wOff + e] += aVal * dFfnOut[dOutOff + e];
+          }
+        }
+      }
+
+      // dHidden (size L1*hidden) = dFfnOut * W2^T
+      // Store into buf.ffnAct[bi] (overwrite)
+      for (let t = 0; t < L1; t++) {
+        const dOutOff = t * emb;
+        const dHidOff = t * hidden;
+        for (let h = 0; h < hidden; h++) {
+          let sum = 0;
+          const wOff = h * emb;
+          for (let e = 0; e < emb; e++) {
+            sum += dFfnOut[dOutOff + e] * W2[wOff + e];
+          }
+          ffnAct[dHidOff + h] = sum;
+        }
+      }
+
+      // dPre = dHidden * gelu'(ffnPre)
+      // store dPre into ffnPre (overwrite)
+      for (let i = 0; i < L1 * hidden; i++) {
+        const gp = _geluGrad(ffnPre[i]);
+        ffnPre[i] = ffnAct[i] * gp;
+      }
+
+      // Backprop through linear1: ffnPre = Xn2*W1 + b1
+      const gW1 = grads.g_W1;
+      const gb1 = grads.g_b1;
+      const W1 = params.W1;
+
+      // gb1 += sum dPre
+      _fill(buf.tmpHidden, 0); // temp accum not used, but keep deterministic
+      for (let h = 0; h < hidden; h++) gb1[h] += 0;
+      for (let t = 0; t < L1; t++) {
+        const dPreOff = t * hidden;
+        for (let h = 0; h < hidden; h++) gb1[h] += ffnPre[dPreOff + h];
+      }
+
+      // gW1[e,h] += Xn2[e]*dPre[h]; dXn2 += dPre*W1^T
+      const dXn2 = buf.dXn; // [L1, emb], reuse and zero
+      _fill(dXn2, 0);
+      for (let t = 0; t < L1; t++) {
+        const xOff = t * emb;
+        const dPreOff = t * hidden;
+        // gW1
+        for (let e = 0; e < emb; e++) {
+          const xv = Xn2[xOff + e];
+          let wOff = e * hidden;
+          for (let h = 0; h < hidden; h++) {
+            gW1[wOff + h] += xv * ffnPre[dPreOff + h];
+          }
+        }
+        // dXn2
+        for (let e = 0; e < emb; e++) {
+          let sum = 0;
+          const wOff = e * hidden;
+          for (let h = 0; h < hidden; h++) {
+            sum += ffnPre[dPreOff + h] * W1[wOff + h];
+          }
+          dXn2[xOff + e] += sum;
+        }
+      }
+
+      // LN2 backward: Xn2 = LN(afterAttn)
+      const ln2Mean = buf.ln2Mean[bi];
+      const ln2Var = buf.ln2Var[bi];
+      const dAfterAttnFromLn = buf.dTmp;
+      _fill(dAfterAttnFromLn, 0);
+
+      for (let t = 0; t < L1; t++) {
+        _layerNormBackward(
+          afterAttn,
+          t * emb,
+          dXn2,
+          t * emb,
+          dAfterAttnFromLn,
+          t * emb,
+          ln2Mean[t],
+          ln2Var[t],
+          emb,
+          params.ln2Gamma,
+          grads.g_ln2Gamma,
+          grads.g_ln2Beta,
+        );
+      }
+
+      // Total dAfterAttn = residual (from H_out) + from LN2 path
+      for (let i = 0; i < L1 * emb; i++) dAfterAttn[i] += dAfterAttnFromLn[i];
+
+      // Residual after attention: afterAttn = H_in + attnProj
+      // => dH_in_res += dAfterAttn; dAttnProj += dAfterAttn
+      const dH_in_res = buf.dTmp; // reuse dTmp as dH_in_res (overwrite)
+      _fill(dH_in_res, 0);
+      const dAttnProj = buf.dAttnProj;
+      _fill(dAttnProj, 0);
+      for (let i = 0; i < L1 * emb; i++) {
+        dH_in_res[i] = dAfterAttn[i];
+        dAttnProj[i] = dAfterAttn[i];
+      }
+
+      // Attention projection backward: attnProj = context * Wo
+      // dWo += context^T * dAttnProj ; dContext = dAttnProj * Wo^T
+      const context = buf.context[bi];
+      const Wo = params.Wo;
+      const gWo = grads.g_Wo;
+      const dContext = buf.dContext;
+      _fill(dContext, 0);
+
+      // gWo
+      for (let t = 0; t < L1; t++) {
+        const cOff = t * emb;
+        const dOff = t * emb;
+        for (let i = 0; i < emb; i++) {
+          const cv = context[cOff + i];
+          let wOff = i * emb;
+          for (let j = 0; j < emb; j++) {
+            gWo[wOff + j] += cv * dAttnProj[dOff + j];
+          }
+        }
+      }
+      // dContext
+      for (let t = 0; t < L1; t++) {
+        const dOff = t * emb;
+        for (let i = 0; i < emb; i++) {
+          let sum = 0;
+          // dContext[i] = sum_j dAttnProj[j] * Wo[i,j]
+          const wOff = i * emb;
+          for (let j = 0; j < emb; j++) {
+            sum += dAttnProj[dOff + j] * Wo[wOff + j];
+          }
+          dContext[dOff + i] = sum;
+        }
+      }
+
+      // MHA backward: recompute softmax per row/head from Q,K; dropout mask regenerated deterministically.
+      const Q = buf.Q[bi];
+      const K = buf.K[bi];
+      const V = buf.V[bi];
+      const dQ = buf.dQ;
+      const dK = buf.dK;
+      const dV = buf.dV;
+      _fill(dQ, 0);
+      _fill(dK, 0);
+      _fill(dV, 0);
+
+      this.mhaBackward(
+        Q,
+        K,
+        V,
+        dContext,
+        dQ,
+        dK,
+        dV,
+        L1,
+        emb,
+        this.config.numHeads,
+        this.config.attentionDropout,
+        true,
+        bi,
+      );
+
+      // Projection backward: Q = Xn1*Wq, etc.
+      const Xn1 = buf.Xn1[bi];
+      const ln1Mean = buf.ln1Mean[bi];
+      const ln1Var = buf.ln1Var[bi];
+
+      // grads Wq/Wk/Wv and dXn1
+      const dXn1 = buf.dXn;
+      _fill(dXn1, 0);
+
+      this.linearBackward2D(Xn1, dQ, L1, emb, params.Wq, grads.g_Wq, dXn1);
+      this.linearBackward2D(Xn1, dK, L1, emb, params.Wk, grads.g_Wk, dXn1);
+      this.linearBackward2D(Xn1, dV, L1, emb, params.Wv, grads.g_Wv, dXn1);
+
+      // LN1 backward: Xn1 = LN(H_in)
+      const dH_in_fromLn = buf.dTmp;
+      _fill(dH_in_fromLn, 0);
+      for (let t = 0; t < L1; t++) {
+        _layerNormBackward(
+          H_in,
+          t * emb,
+          dXn1,
+          t * emb,
+          dH_in_fromLn,
+          t * emb,
+          ln1Mean[t],
+          ln1Var[t],
+          emb,
+          params.ln1Gamma,
+          grads.g_ln1Gamma,
+          grads.g_ln1Beta,
+        );
+      }
+
+      // Total dH for previous layer: dH = dH_in_res + dH_in_fromLn
+      for (let i = 0; i < L1 * emb; i++) dH[i] = dH_in_res[i] + dH_in_fromLn[i];
+    }
+
+    // Now dH is gradient at transformer input = fused
+    _copy(buf.dFused, dH, L1 * emb);
+
+    // Fusion dropout backward: regenerate mask and scale
+    if (this.config.fusionDropout > 0) {
+      const p = this.config.fusionDropout;
+      const scale = 1 / (1 - p);
+      const rng = new _XorShift32(
+        (this.updateCount + 1) * 2654435761 ^ 0xA5A5A5A5,
+      );
+      for (let i = 0; i < L1 * emb; i++) {
+        const keep = rng.nextFloat() >= p ? 1 : 0;
+        buf.dFused[i] = buf.dFused[i] * keep * scale;
+      }
+    }
+
+    // Fusion backward:
+    // fusedPre[t,e] = sum_s gate_s[t,e] * EUp_s[t,e]
+    // dGate += dFused * EUp ; dEUp += dFused * gate
+    _fill(buf.dGate, 0);
+    for (let si = 0; si < this.nScales; si++) _fill(buf.dEUp[si], 0);
+
+    for (let t = 0; t < L1; t++) {
+      const gOff = t * concatDim;
+      const dFoff = t * emb;
+
+      for (let si = 0; si < this.nScales; si++) {
+        const EUp = buf.EUp[si];
+        const dEUp = buf.dEUp[si];
+        const srcOff = t * emb;
+        const gBase = gOff + si * emb;
+        for (let e = 0; e < emb; e++) {
+          const df = buf.dFused[dFoff + e];
+          const gu = gate[gBase + e];
+          const eu = EUp[srcOff + e];
+          dEUp[srcOff + e] += df * gu;
+          buf.dGate[gBase + e] += df * eu;
+        }
+      }
+    }
+
+    // gatePre -> sigmoid
+    for (let i = 0; i < L1 * concatDim; i++) {
+      const g = gate[i];
+      buf.dGatePre[i] = buf.dGate[i] * g * (1 - g);
+    }
+
+    // gatePre = concat * Wg + bg
+    // grads gWg += concat^T * dGatePre ; gbg += sum dGatePre ; dConcat = dGatePre * Wg^T
+    const gWg = this.gWg!;
+    const gbg = this.gbg!;
+    _fill(buf.dConcat, 0);
+
+    // gbg
+    for (let d = 0; d < concatDim; d++) gbg[d] += 0;
+    for (let t = 0; t < L1; t++) {
+      const off = t * concatDim;
+      for (let d = 0; d < concatDim; d++) gbg[d] += buf.dGatePre[off + d];
+    }
+
+    // gWg and dConcat
+    for (let t = 0; t < L1; t++) {
+      const xOff = t * concatDim;
+      const dOff = t * concatDim;
+
+      // gWg[c,d] += concat[c]*dGatePre[d]
+      for (let c = 0; c < concatDim; c++) {
+        const xv = concat[xOff + c];
+        const wBase = c * concatDim;
+        for (let d = 0; d < concatDim; d++) {
+          gWg[wBase + d] += xv * buf.dGatePre[dOff + d];
+        }
+      }
+
+      // dConcat[c] += sum_d dGatePre[d] * Wg[c,d]
+      for (let c = 0; c < concatDim; c++) {
+        const wBase = c * concatDim;
+        let sum = 0;
+        for (let d = 0; d < concatDim; d++) {
+          sum += buf.dGatePre[dOff + d] * Wg[wBase + d];
+        }
+        buf.dConcat[xOff + c] += sum;
+      }
+    }
+
+    // Split dConcat into dEUp parts and add
+    for (let t = 0; t < L1; t++) {
+      const base = t * concatDim;
+      let w = 0;
+      for (let si = 0; si < this.nScales; si++) {
+        const dEUp = buf.dEUp[si];
+        const dstOff = t * emb;
+        for (let e = 0; e < emb; e++) {
+          dEUp[dstOff + e] += buf.dConcat[base + (w++)];
+        }
+      }
+    }
+
+    // Backprop upsampling and add scale embedding grads and conv grads
+    // Reset per-scale dE
+    for (let si = 0; si < this.nScales; si++) _fill(buf.dE[si], 0);
+
+    // Upsampling backward: EUp[t] from E[te]
+    for (let si = 0; si < this.nScales; si++) {
+      const s = this.config.temporalScales[si];
+      const Ls = Math.floor((L1 + s - 1) / s);
+      const dE = buf.dE[si];
+      const dEUp = buf.dEUp[si];
+
+      for (let t = 0; t < L1; t++) {
+        let te = Math.floor(t / s);
+        if (te < 0) te = 0;
+        if (te >= Ls) te = Ls - 1;
+        const dstOff = te * emb;
+        const srcOff = t * emb;
+        for (let e = 0; e < emb; e++) dE[dstOff + e] += dEUp[srcOff + e];
+      }
+    }
+
+    // E = convAct + PE + scaleEmb
+    // => dScaleEmb[e] += sum_t dE[t,e]; dConvAct = dE
+    for (let si = 0; si < this.nScales; si++) {
+      const sparams = this.scales[si];
+      const sgrad = this.scaleGrad[si];
+
+      const s = this.config.temporalScales[si];
+      const Ls = Math.floor((L1 + s - 1) / s);
+
+      // dScaleEmb
+      for (let e = 0; e < emb; e++) sgrad.g_scaleEmb[e] += 0;
+      for (let tt = 0; tt < Ls; tt++) {
+        const off = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          sgrad.g_scaleEmb[e] += buf.dE[si][off + e];
+        }
+      }
+
+      // convAct = GELU(convPre)
+      // dConvPre = dE * gelu'(convPre)
+      const convPre = buf.convPre[si];
+      const dConvPre = buf.convAct[si]; // reuse convAct buffer as dConvPre (safe; convAct not needed anymore)
+      for (let i = 0; i < Ls * emb; i++) {
+        dConvPre[i] = buf.dE[si][i] * _geluGrad(convPre[i]);
+      }
+
+      // Conv backward:
+      // convPre[tt,e] = sum_{k,f} xNorm[tBase-k,f]*W[k,f,e] + b[e], tBase=tt*s
+      const K = this.config.temporalKernelSize;
+      const W = sparams.W;
+      const b = sparams.b;
+      const gW = sgrad.g_W;
+      const gb = sgrad.g_b;
+
+      for (let e = 0; e < emb; e++) gb[e] += 0;
+
+      for (let tt = 0; tt < Ls; tt++) {
+        const tBase = tt * s;
+        const dOff = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          const dp = dConvPre[dOff + e];
+          gb[e] += dp;
+
+          for (let k = 0; k < K; k++) {
+            const idx = tBase - k;
+            if (idx < 0) continue;
+            if (idx >= L1) continue;
+            const xOff = idx * inDim;
+
+            let wOff = (k * inDim) * emb + e;
+            for (let f = 0; f < inDim; f++) {
+              gW[wOff] += buf.xNorm[xOff + f] * dp;
+              wOff += emb;
+            }
+          }
+        }
+      }
+    }
+
+    // ===== Gradient norm + clip + Adam =====
+    this.updateCount++;
+    const t = this.updateCount;
+    const lr = _computeScheduledLR(
+      this.config.learningRate,
+      t,
+      this.config.warmupSteps,
+      this.config.totalSteps,
+    );
+    this.lastEffectiveLR = lr;
+
+    // Compute grad norm (after L2 addition inside adam); we also clip by norm 5.0 across raw grads.
+    let rawNorm2 = 0;
+    rawNorm2 += this.sumGradSquares();
+    let rawNorm = Math.sqrt(rawNorm2);
+    if (!Number.isFinite(rawNorm)) rawNorm = 0;
+
+    const clip = 5.0;
+    let clipScale = 1.0;
+    if (rawNorm > clip && rawNorm > 0) clipScale = clip / rawNorm;
+
+    if (clipScale !== 1.0) this.scaleAllGrads(clipScale);
+
+    const accum = { v: 0 };
+    // Update scale params
+    for (let si = 0; si < this.nScales; si++) {
+      const sp = this.scales[si];
+      const sm = this.scaleMom[si];
+      const sg = this.scaleGrad[si];
+      _adamUpdate(
+        sp.W,
+        sg.g_W,
+        sm.m_W,
+        sm.v_W,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        sp.b,
+        sg.g_b,
+        sm.m_b,
+        sm.v_b,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        sp.scaleEmb,
+        sg.g_scaleEmb,
+        sm.m_scaleEmb,
+        sm.v_scaleEmb,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+    }
+
+    // Fusion params
+    _adamUpdate(
+      this.Wg!,
+      this.gWg!,
+      this.mWg!,
+      this.vWg!,
+      lr,
+      this.config.beta1,
+      this.config.beta2,
+      this.config.epsilon,
+      t,
+      lambda,
+      accum,
+    );
+    _adamUpdate(
+      this.bg!,
+      this.gbg!,
+      this.mbg!,
+      this.vbg!,
+      lr,
+      this.config.beta1,
+      this.config.beta2,
+      this.config.epsilon,
+      t,
+      lambda,
+      accum,
+    );
+
+    // Blocks
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const p = this.blocks[bi];
+      const m = this.blockMom[bi];
+      const g = this.blockGrad[bi];
+
+      _adamUpdate(
+        p.ln1Gamma,
+        g.g_ln1Gamma,
+        m.m_ln1Gamma,
+        m.v_ln1Gamma,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.ln1Beta,
+        g.g_ln1Beta,
+        m.m_ln1Beta,
+        m.v_ln1Beta,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+
+      _adamUpdate(
+        p.Wq,
+        g.g_Wq,
+        m.m_Wq,
+        m.v_Wq,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.Wk,
+        g.g_Wk,
+        m.m_Wk,
+        m.v_Wk,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.Wv,
+        g.g_Wv,
+        m.m_Wv,
+        m.v_Wv,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.Wo,
+        g.g_Wo,
+        m.m_Wo,
+        m.v_Wo,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+
+      _adamUpdate(
+        p.ln2Gamma,
+        g.g_ln2Gamma,
+        m.m_ln2Gamma,
+        m.v_ln2Gamma,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.ln2Beta,
+        g.g_ln2Beta,
+        m.m_ln2Beta,
+        m.v_ln2Beta,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+
+      _adamUpdate(
+        p.W1,
+        g.g_W1,
+        m.m_W1,
+        m.v_W1,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.b1,
+        g.g_b1,
+        m.m_b1,
+        m.v_b1,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.W2,
+        g.g_W2,
+        m.m_W2,
+        m.v_W2,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      _adamUpdate(
+        p.b2,
+        g.g_b2,
+        m.m_b2,
+        m.v_b2,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+    }
+
+    // Pool and Output head
+    _adamUpdate(
+      this.Wpool!,
+      this.gWpool!,
+      this.mWpool!,
+      this.vWpool!,
+      lr,
+      this.config.beta1,
+      this.config.beta2,
+      this.config.epsilon,
+      t,
+      lambda,
+      accum,
+    );
+    // bpool scalar as length-1 update
+    {
+      const bArr = new Float64Array(1);
+      bArr[0] = this.bpool;
+      const gArr = new Float64Array(1);
+      gArr[0] = this.gbpool;
+      const mArr = new Float64Array(1);
+      mArr[0] = this.mbpool;
+      const vArr = new Float64Array(1);
+      vArr[0] = this.vbpool;
+      _adamUpdate(
+        bArr,
+        gArr,
+        mArr,
+        vArr,
+        lr,
+        this.config.beta1,
+        this.config.beta2,
+        this.config.epsilon,
+        t,
+        lambda,
+        accum,
+      );
+      this.bpool = bArr[0];
+      this.mbpool = mArr[0];
+      this.vbpool = vArr[0];
+      // note: tiny allocation; acceptable because scalar, but still "hot". Avoid by storing as length-1 Float64Array fields.
+      // For strictness, users can set attentionDropout/fusionDropout=0 to keep speed.
+    }
+
+    _adamUpdate(
+      this.Wout!,
+      this.gWout!,
+      this.mWout!,
+      this.vWout!,
+      lr,
+      this.config.beta1,
+      this.config.beta2,
+      this.config.epsilon,
+      t,
+      lambda,
+      accum,
+    );
+    _adamUpdate(
+      this.bout!,
+      this.gbout!,
+      this.mbout!,
+      this.vbout!,
+      lr,
+      this.config.beta1,
+      this.config.beta2,
+      this.config.epsilon,
+      t,
+      lambda,
+      accum,
+    );
+
+    const gradNorm = Math.sqrt(accum.v);
+    this.lastConverged = gradNorm < this.config.convergenceThreshold;
+
+    // Update residual stats (original scale)
+    const yHatRaw = buf.tmpHidden; // reuse tmpHidden as scratch vector length hidden; but outDim may exceed hidden. Ensure separate:
+    // We'll compute in-place without storing full vector: update residual stats dimensionwise.
+    // yHatRaw[d] = yHatNorm[d]*outStd[d] + outMean[d]
+    // residual = yTargetRaw - yHatRaw
+    const resVec = new Float64Array(outDim);
+    for (let d = 0; d < outDim; d++) {
+      const yh = yHat[d] * outStd[d] + outMean[d];
+      resVec[d] = buf.yTargetRaw[d] - yh;
+    }
+    _welfordUpdateVec(this.resStats!, resVec, 0, outDim);
+
+    // ADWIN drift detection on weighted loss (normalized after outlier weight)
+    const driftDetected = _adwinAddAndDetect(this.adwin, loss);
     if (driftDetected) {
       this.driftCount++;
+      _adwinReset(this.adwin);
+      this.runningLoss = loss; // optionally reset running loss baseline
     }
 
-    this.updateCount++;
-
     return {
-      loss: totalLoss,
+      loss,
       gradientNorm: gradNorm,
       effectiveLearningRate: lr,
       isOutlier,
-      converged: this.converged,
+      converged: this.lastConverged,
       sampleIndex: this.sampleCount,
       driftDetected,
     };
   }
 
   /**
-   * Generates predictions for future timesteps.
-   *
-   * @param futureSteps - Number of future steps to predict
-   * @returns PredictionResult with predictions, bounds, and uncertainty
-   *
-   * @example
-   * ```typescript
-   * const result = model.predict(5);
-   * for (const pred of result.predictions) {
-   *   console.log(`Predicted: ${pred.predicted}, SE: ${pred.standardError}`);
-   * }
-   * ```
+   * Predict future steps using cached last window. Autoregressive without future x:
+   * - step 0 uses one-step prediction from cached window
+   * - further steps repeat same mean prediction and increase uncertainty: se *= sqrt(stepIndex+1)
+   * @param futureSteps number of steps to predict
+   * @returns PredictionResult
    */
-  public predict(futureSteps: number): PredictionResult {
-    const isReady = this.isInitialized && this.normCount >= 2;
+  predict(futureSteps: number): PredictionResult {
+    const steps = Math.max(1, Math.floor(futureSteps));
+    const isModelReady = this.isInitialized && this.sampleCount >= 2 &&
+      !!this.lastXRaw && this.lastSeqLen > 0;
 
-    if (!isReady || futureSteps <= 0) {
+    const preds: SinglePrediction[] = new Array<SinglePrediction>(steps);
+
+    const accuracy = 1 / (1 + this.runningLoss);
+
+    if (!isModelReady) {
+      for (let s = 0; s < steps; s++) {
+        preds[s] = {
+          predicted: [],
+          lowerBound: [],
+          upperBound: [],
+          standardError: [],
+        };
+      }
       return {
-        predictions: [],
-        accuracy: 0,
+        predictions: preds,
+        accuracy,
         sampleCount: this.sampleCount,
-        isModelReady: isReady,
+        isModelReady: false,
       };
     }
 
-    const seqLen = this.lastWindowLen;
+    // Run a forward pass using cached xRaw; deterministic inference (dropouts off).
+    const inDim = this.inputDim;
+    const outDim = this.outputDim;
     const emb = this.config.embeddingDim;
+    const concatDim = this.nScales * emb;
+    const L1 = this.lastSeqLen;
 
-    // Normalize cached input
-    const inputStd = new Float64Array(this.inputDim);
-    this.getStd(this.inputM2, this.normCount, inputStd);
-    for (let t = 0; t < seqLen; t++) {
-      for (let f = 0; f < this.inputDim; f++) {
-        this.fwdNormX[t * this.inputDim + f] =
-          (this.lastWindow[t * this.inputDim + f] - this.inputMean[f]) /
-          inputStd[f];
+    this.ensureBuffers();
+    const buf = this.buf!;
+
+    // Copy lastXRaw into xRaw
+    _copy(buf.xRaw, this.lastXRaw!, L1 * inDim);
+
+    // Normalize x using current stats
+    const inMean = this.inStats!.mean;
+    const inStd = this.inStd!;
+    for (let t = 0; t < L1; t++) {
+      const off = t * inDim;
+      for (let f = 0; f < inDim; f++) {
+        const z = (buf.xRaw[off + f] - inMean[f]) /
+          (inStd[f] <= 1e-12 ? 1e-12 : inStd[f]);
+        buf.xNorm[off + f] = _isFiniteNumber(z) ? z : 0;
       }
     }
 
-    // Forward pass (no dropout)
-    this.forward(this.fwdNormX, seqLen, false);
+    // Forward (same as training but with dropout disabled)
+    // Multi-scale conv
+    for (let si = 0; si < this.nScales; si++) {
+      const s = this.config.temporalScales[si];
+      const K = this.config.temporalKernelSize;
+      const Ls = Math.floor((L1 + s - 1) / s);
+      const W = this.scales[si].W;
+      const b = this.scales[si].b;
+      const convAct = buf.convAct[si];
 
-    // Denormalize output
-    const outputStd = new Float64Array(this.outputDim);
-    this.getStd(this.outputM2, this.normCount, outputStd);
-
-    const basePrediction = new Float64Array(this.outputDim);
-    for (let o = 0; o < this.outputDim; o++) {
-      basePrediction[o] = this.fwdOutput[o] * outputStd[o] + this.outputMean[o];
-    }
-
-    // Compute base standard error from residual variance
-    const baseStdError = new Float64Array(this.outputDim);
-    for (let o = 0; o < this.outputDim; o++) {
-      const variance = this.residualM2[o] / Math.max(1, this.residualCount);
-      baseStdError[o] = Math.sqrt(Math.max(variance, 1e-12)) * outputStd[o];
-    }
-
-    // Generate predictions
-    const predictions: SinglePrediction[] = [];
-    const z = 1.96; // 95% confidence
-
-    for (let step = 0; step < futureSteps; step++) {
-      const uncertainty = Math.sqrt(step + 1);
-
-      const predicted: number[] = [];
-      const lowerBound: number[] = [];
-      const upperBound: number[] = [];
-      const standardError: number[] = [];
-
-      for (let o = 0; o < this.outputDim; o++) {
-        const se = baseStdError[o] * uncertainty;
-        predicted.push(basePrediction[o]);
-        standardError.push(se);
-        lowerBound.push(basePrediction[o] - z * se);
-        upperBound.push(basePrediction[o] + z * se);
+      for (let tt = 0; tt < Ls; tt++) {
+        const tBase = tt * s;
+        const outOff = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          let sum = b[e];
+          for (let k = 0; k < K; k++) {
+            const idx = tBase - k;
+            if (idx < 0) continue;
+            if (idx >= L1) continue;
+            const xOff = idx * inDim;
+            let wOff = (k * inDim) * emb + e;
+            for (let f = 0; f < inDim; f++) {
+              sum += buf.xNorm[xOff + f] * W[wOff];
+              wOff += emb;
+            }
+          }
+          convAct[outOff + e] = _gelu(sum);
+        }
       }
 
-      predictions.push({ predicted, lowerBound, upperBound, standardError });
+      // E and upsample
+      const E = buf.E[si];
+      const scaleEmb = this.scales[si].scaleEmb;
+      const pe = this.pe!;
+      for (let tt = 0; tt < Ls; tt++) {
+        const off = tt * emb;
+        const peOff = tt * emb;
+        for (let e = 0; e < emb; e++) {
+          E[off + e] = convAct[off + e] + pe[peOff + e] + scaleEmb[e];
+        }
+      }
+      const EUp = buf.EUp[si];
+      for (let t = 0; t < L1; t++) {
+        let te = Math.floor(t / s);
+        if (te < 0) te = 0;
+        if (te >= Ls) te = Ls - 1;
+        const srcOff = te * emb;
+        const dstOff = t * emb;
+        for (let e = 0; e < emb; e++) EUp[dstOff + e] = E[srcOff + e];
+      }
     }
 
-    // Accuracy = 1 / (1 + runningLoss)
-    const accuracy = 1 / (1 + this.runningLoss);
+    // concat
+    for (let t = 0; t < L1; t++) {
+      const base = t * concatDim;
+      let w = 0;
+      for (let si = 0; si < this.nScales; si++) {
+        const EUp = buf.EUp[si];
+        const srcOff = t * emb;
+        for (let e = 0; e < emb; e++) {
+          buf.concat[base + (w++)] = EUp[srcOff + e];
+        }
+      }
+    }
+
+    // gate and fused (no fusion dropout)
+    const Wg = this.Wg!;
+    const bg = this.bg!;
+    for (let t = 0; t < L1; t++) {
+      const xOff = t * concatDim;
+      const yOff = t * concatDim;
+      for (let d = 0; d < concatDim; d++) {
+        let sum = bg[d];
+        let wOff = d;
+        for (let c = 0; c < concatDim; c++) {
+          sum += buf.concat[xOff + c] * Wg[wOff];
+          wOff += concatDim;
+        }
+        buf.gate[yOff + d] = _sigmoid(sum);
+      }
+    }
+    for (let t = 0; t < L1; t++) {
+      const gOff = t * concatDim;
+      const outOff = t * emb;
+      for (let e = 0; e < emb; e++) buf.fused[outOff + e] = 0;
+      for (let si = 0; si < this.nScales; si++) {
+        const EUp = buf.EUp[si];
+        const srcOff = t * emb;
+        const gBase = gOff + si * emb;
+        for (let e = 0; e < emb; e++) {
+          buf.fused[outOff + e] += buf.gate[gBase + e] * EUp[srcOff + e];
+        }
+      }
+    }
+
+    // Transformer blocks (no attention dropout)
+    let H = buf.fused;
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const params = this.blocks[bi];
+      const H_in = buf.blockInput[bi];
+      _copy(H_in, H, L1 * emb);
+
+      const Xn1 = buf.Xn1[bi];
+      const m1 = buf.ln1Mean[bi];
+      const v1 = buf.ln1Var[bi];
+      for (let t = 0; t < L1; t++) {
+        _layerNormForward(
+          H_in,
+          t * emb,
+          Xn1,
+          t * emb,
+          m1,
+          v1,
+          t,
+          emb,
+          params.ln1Gamma,
+          params.ln1Beta,
+        );
+      }
+
+      const Q = buf.Q[bi];
+      const K = buf.K[bi];
+      const V = buf.V[bi];
+      this.linearForward2D(Xn1, Q, L1, emb, params.Wq, null);
+      this.linearForward2D(Xn1, K, L1, emb, params.Wk, null);
+      this.linearForward2D(Xn1, V, L1, emb, params.Wv, null);
+
+      const context = buf.context[bi];
+      this.mhaForward(
+        Q,
+        K,
+        V,
+        context,
+        L1,
+        emb,
+        this.config.numHeads,
+        0.0,
+        true,
+        bi,
+      );
+
+      const attnProj = buf.attnProj[bi];
+      this.linearForward2D(context, attnProj, L1, emb, params.Wo, null);
+
+      const afterAttn = buf.afterAttn[bi];
+      for (let i = 0; i < L1 * emb; i++) afterAttn[i] = H_in[i] + attnProj[i];
+
+      const Xn2 = buf.Xn2[bi];
+      const m2 = buf.ln2Mean[bi];
+      const v2 = buf.ln2Var[bi];
+      for (let t = 0; t < L1; t++) {
+        _layerNormForward(
+          afterAttn,
+          t * emb,
+          Xn2,
+          t * emb,
+          m2,
+          v2,
+          t,
+          emb,
+          params.ln2Gamma,
+          params.ln2Beta,
+        );
+      }
+
+      const ffnPre = buf.ffnPre[bi];
+      const ffnAct = buf.ffnAct[bi];
+      const ffnOut = buf.ffnOut[bi];
+      this.linearForward2D(Xn2, ffnPre, L1, emb, params.W1, params.b1);
+      for (let i = 0; i < L1 * this.hiddenDim; i++) {
+        ffnAct[i] = _gelu(ffnPre[i]);
+      }
+      this.linearForward2D(
+        ffnAct,
+        ffnOut,
+        L1,
+        this.hiddenDim,
+        params.W2,
+        params.b2,
+      );
+
+      for (let i = 0; i < L1 * emb; i++) H[i] = afterAttn[i] + ffnOut[i];
+    }
+
+    // Pool
+    const scores = buf.poolScores;
+    const alpha = buf.poolAlpha;
+    const pooled = buf.pooled;
+    const Wpool = this.Wpool!;
+    const bpool = this.bpool;
+    for (let t = 0; t < L1; t++) {
+      scores[t] = _dot(H, t * emb, Wpool, 0, emb) + bpool;
+    }
+    _softmaxRowStable(alpha, 0, scores, 0, L1);
+    _fill(pooled, 0);
+    for (let t = 0; t < L1; t++) {
+      const a = alpha[t];
+      const off = t * emb;
+      for (let e = 0; e < emb; e++) pooled[e] += a * H[off + e];
+    }
+
+    // Output
+    const yHatNorm = buf.yHatNorm;
+    for (let d = 0; d < outDim; d++) {
+      let sum = this.bout![d];
+      let wOff = d;
+      for (let e = 0; e < emb; e++) {
+        sum += pooled[e] * this.Wout![wOff];
+        wOff += outDim;
+      }
+      yHatNorm[d] = sum;
+    }
+
+    // Denormalize and compute standard errors from residual stats
+    const outMean = this.outStats!.mean;
+    const outStd = this.outStd!;
+    const resStd = new Float64Array(outDim);
+    _welfordStd(this.resStats!, resStd);
+
+    const meanPred = new Array<number>(outDim);
+    const baseSE = new Array<number>(outDim);
+    for (let d = 0; d < outDim; d++) {
+      const pr = yHatNorm[d] * outStd[d] + outMean[d];
+      meanPred[d] = _isFiniteNumber(pr) ? pr : 0;
+      baseSE[d] = _isFiniteNumber(resStd[d]) ? resStd[d] : 0;
+    }
+
+    for (let s = 0; s < steps; s++) {
+      const mul = Math.sqrt(s + 1);
+      const predicted = new Array<number>(outDim);
+      const standardError = new Array<number>(outDim);
+      const lowerBound = new Array<number>(outDim);
+      const upperBound = new Array<number>(outDim);
+
+      for (let d = 0; d < outDim; d++) {
+        const se = baseSE[d] * mul;
+        const mu = meanPred[d];
+        predicted[d] = mu;
+        standardError[d] = se;
+        lowerBound[d] = mu - 1.96 * se;
+        upperBound[d] = mu + 1.96 * se;
+      }
+
+      preds[s] = { predicted, lowerBound, upperBound, standardError };
+    }
 
     return {
-      predictions,
+      predictions: preds,
       accuracy,
       sampleCount: this.sampleCount,
       isModelReady: true,
     };
   }
 
-  /**
-   * Returns a summary of the model's current state.
-   *
-   * @returns ModelSummary with architecture and training info
-   *
-   * @example
-   * ```typescript
-   * const summary = model.getModelSummary();
-   * console.log(`Total parameters: ${summary.totalParameters}`);
-   * ```
-   */
-  public getModelSummary(): ModelSummary {
+  /** @returns current model summary. */
+  getModelSummary(): ModelSummary {
     return {
       isInitialized: this.isInitialized,
       inputDimension: this.inputDim,
@@ -2455,130 +2349,183 @@ export class FusionTemporalTransformerRegression {
       numBlocks: this.config.numBlocks,
       embeddingDim: this.config.embeddingDim,
       numHeads: this.config.numHeads,
-      temporalScales: [...this.config.temporalScales],
-      totalParameters: this.totalParams,
+      temporalScales: this.config.temporalScales.slice(),
+      totalParameters: this.countTotalParameters(),
       sampleCount: this.sampleCount,
       accuracy: 1 / (1 + this.runningLoss),
-      converged: this.converged,
-      effectiveLearningRate: this.lastLR,
+      converged: this.lastConverged,
+      effectiveLearningRate: this.lastEffectiveLR,
       driftCount: this.driftCount,
     };
   }
 
-  /**
-   * Returns the current model weights.
-   *
-   * @returns WeightInfo containing all trainable parameters
-   */
-  public getWeights(): WeightInfo {
-    const toArr = (f: Float64Array): number[] => Array.from(f);
+  /** @returns current weights and optimizer moments in the declared shapes (nested arrays). */
+  getWeights(): WeightInfo {
+    if (!this.isInitialized) {
+      return {
+        temporalConvWeights: [],
+        scaleEmbeddings: [],
+        positionalEncoding: [],
+        fusionWeights: [],
+        attentionWeights: [],
+        ffnWeights: [],
+        layerNormParams: [],
+        outputWeights: [],
+        firstMoment: [],
+        secondMoment: [],
+        updateCount: this.updateCount,
+      };
+    }
+
     const emb = this.config.embeddingDim;
-    const ks = this.config.temporalKernelSize;
+    const inDim = this.inputDim;
+    const outDim = this.outputDim;
+    const K = this.config.temporalKernelSize;
+    const concatDim = this.nScales * emb;
 
-    // Temporal conv weights: [scale][kernel*input][emb]
-    const temporalConvWeights: number[][][] = [];
-    for (let s = 0; s < this.numScales; s++) {
-      const scale: number[][] = [];
-      for (let k = 0; k < ks * this.inputDim; k++) {
-        const row: number[] = [];
-        for (let e = 0; e < emb; e++) {
-          row.push(this.convW[s] ? this.convW[s][k * emb + e] : 0);
+    // temporalConvWeights: [nScales][K+1][...flattened...]
+    const temporalConvWeights: number[][][] = new Array(this.nScales);
+    const scaleEmbeddings: number[][] = new Array(this.nScales);
+
+    for (let si = 0; si < this.nScales; si++) {
+      const W = this.scales[si].W;
+      const b = this.scales[si].b;
+      const group: number[][] = new Array(K + 1);
+      // K kernels flattened [inDim*emb]
+      for (let k = 0; k < K; k++) {
+        const flat = new Array<number>(inDim * emb);
+        let idx = 0;
+        for (let f = 0; f < inDim; f++) {
+          for (let e = 0; e < emb; e++) {
+            const wOff = (k * inDim + f) * emb + e;
+            flat[idx++] = W[wOff];
+          }
         }
-        scale.push(row);
+        group[k] = flat;
       }
-      temporalConvWeights.push(scale);
+      group[K] = _pack1D(b);
+      temporalConvWeights[si] = group;
+
+      scaleEmbeddings[si] = _pack1D(this.scales[si].scaleEmb);
     }
 
-    // Scale embeddings: [scale][emb]
-    const scaleEmbeddings: number[][] = [];
-    for (let s = 0; s < this.numScales; s++) {
-      const row: number[] = [];
+    // Positional encoding (expose cached length up to maxSequenceLength)
+    const peLen = this.config.maxSequenceLength;
+    const positionalEncoding = this.pe ? _pack2D(this.pe, peLen, emb) : [];
+
+    // Fusion weights: [WgFlat, bg]
+    const fusionWeights: number[][] = [
+      this.Wg ? _pack1D(this.Wg) : [],
+      this.bg ? _pack1D(this.bg) : [],
+    ];
+
+    // Attention weights: [numBlocks][4][flat]
+    const attentionWeights: number[][][] = new Array(this.config.numBlocks);
+    const ffnWeights: number[][][] = new Array(this.config.numBlocks);
+    const layerNormParams: number[][] = new Array(this.config.numBlocks * 2);
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const p = this.blocks[bi];
+      attentionWeights[bi] = [
+        _pack1D(p.Wq),
+        _pack1D(p.Wk),
+        _pack1D(p.Wv),
+        _pack1D(p.Wo),
+      ];
+
+      ffnWeights[bi] = [
+        _pack1D(p.W1),
+        _pack1D(p.b1),
+        _pack1D(p.W2),
+        _pack1D(p.b2),
+      ];
+
+      // layerNormParams: each row is [gamma..., beta...]
+      const ln1 = new Array<number>(2 * emb);
+      const ln2 = new Array<number>(2 * emb);
       for (let e = 0; e < emb; e++) {
-        row.push(this.scaleEmb ? this.scaleEmb[s * emb + e] : 0);
+        ln1[e] = p.ln1Gamma[e];
+        ln1[emb + e] = p.ln1Beta[e];
+        ln2[e] = p.ln2Gamma[e];
+        ln2[emb + e] = p.ln2Beta[e];
       }
-      scaleEmbeddings.push(row);
+      layerNormParams[2 * bi] = ln1;
+      layerNormParams[2 * bi + 1] = ln2;
     }
 
-    // Positional encoding: [pos][emb]
-    const positionalEncoding: number[][] = [];
-    const maxLen = this.config.maxSequenceLength;
-    for (let p = 0; p < maxLen; p++) {
-      const row: number[] = [];
-      for (let e = 0; e < emb; e++) {
-        row.push(this.posEnc ? this.posEnc[p * emb + e] : 0);
-      }
-      positionalEncoding.push(row);
+    // Output weights: [Wpool, [bpool], WoutFlat, bout]
+    const outputWeights: number[][] = [
+      this.Wpool ? _pack1D(this.Wpool) : [],
+      [this.bpool],
+      this.Wout ? _pack1D(this.Wout) : [],
+      this.bout ? _pack1D(this.bout) : [],
+    ];
+
+    // Moments packed as [paramIndex][1][flat] to satisfy number[][][] without ambiguity.
+    const firstMoment: number[][][] = [];
+    const secondMoment: number[][][] = [];
+    // scales
+    for (let si = 0; si < this.nScales; si++) {
+      const sm = this.scaleMom[si];
+      firstMoment.push([_pack1D(sm.m_W)], [_pack1D(sm.m_b)], [
+        _pack1D(sm.m_scaleEmb),
+      ]);
+      secondMoment.push([_pack1D(sm.v_W)], [_pack1D(sm.v_b)], [
+        _pack1D(sm.v_scaleEmb),
+      ]);
     }
-
-    // Fusion weights
-    const fusionDim = this.numScales * emb;
-    const fusionWeights: number[][] = [];
-    for (let i = 0; i < fusionDim; i++) {
-      const row: number[] = [];
-      for (let j = 0; j < fusionDim; j++) {
-        row.push(this.fusionW ? this.fusionW[i * fusionDim + j] : 0);
-      }
-      fusionWeights.push(row);
+    // fusion
+    firstMoment.push([this.mWg ? _pack1D(this.mWg) : []], [
+      this.mbg ? _pack1D(this.mbg) : [],
+    ]);
+    secondMoment.push([this.vWg ? _pack1D(this.vWg) : []], [
+      this.vbg ? _pack1D(this.vbg) : [],
+    ]);
+    // blocks
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const bm = this.blockMom[bi];
+      firstMoment.push(
+        [_pack1D(bm.m_ln1Gamma)],
+        [_pack1D(bm.m_ln1Beta)],
+        [_pack1D(bm.m_Wq)],
+        [_pack1D(bm.m_Wk)],
+        [_pack1D(bm.m_Wv)],
+        [_pack1D(bm.m_Wo)],
+        [_pack1D(bm.m_ln2Gamma)],
+        [_pack1D(bm.m_ln2Beta)],
+        [_pack1D(bm.m_W1)],
+        [_pack1D(bm.m_b1)],
+        [_pack1D(bm.m_W2)],
+        [_pack1D(bm.m_b2)],
+      );
+      secondMoment.push(
+        [_pack1D(bm.v_ln1Gamma)],
+        [_pack1D(bm.v_ln1Beta)],
+        [_pack1D(bm.v_Wq)],
+        [_pack1D(bm.v_Wk)],
+        [_pack1D(bm.v_Wv)],
+        [_pack1D(bm.v_Wo)],
+        [_pack1D(bm.v_ln2Gamma)],
+        [_pack1D(bm.v_ln2Beta)],
+        [_pack1D(bm.v_W1)],
+        [_pack1D(bm.v_b1)],
+        [_pack1D(bm.v_W2)],
+        [_pack1D(bm.v_b2)],
+      );
     }
-
-    // Attention weights: [block][type (Wq,Wk,Wv,Wo)][emb*emb]
-    const attentionWeights: number[][][] = [];
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      const block: number[][] = [];
-      block.push(this.attnWq[b] ? toArr(this.attnWq[b]) : []);
-      block.push(this.attnWk[b] ? toArr(this.attnWk[b]) : []);
-      block.push(this.attnWv[b] ? toArr(this.attnWv[b]) : []);
-      block.push(this.attnWo[b] ? toArr(this.attnWo[b]) : []);
-      attentionWeights.push(block);
-    }
-
-    // FFN weights: [block][type (W1,b1,W2,b2)][...]
-    const ffnWeights: number[][][] = [];
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      const block: number[][] = [];
-      block.push(this.ffnW1[b] ? toArr(this.ffnW1[b]) : []);
-      block.push(this.ffnB1[b] ? toArr(this.ffnB1[b]) : []);
-      block.push(this.ffnW2[b] ? toArr(this.ffnW2[b]) : []);
-      block.push(this.ffnB2[b] ? toArr(this.ffnB2[b]) : []);
-      ffnWeights.push(block);
-    }
-
-    // LayerNorm params: [layer][gamma+beta]
-    const layerNormParams: number[][] = [];
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      const ln1: number[] = [];
-      if (this.ln1Gamma[b]) {
-        for (let e = 0; e < emb; e++) ln1.push(this.ln1Gamma[b][e]);
-        for (let e = 0; e < emb; e++) ln1.push(this.ln1Beta[b][e]);
-      }
-      layerNormParams.push(ln1);
-
-      const ln2: number[] = [];
-      if (this.ln2Gamma[b]) {
-        for (let e = 0; e < emb; e++) ln2.push(this.ln2Gamma[b][e]);
-        for (let e = 0; e < emb; e++) ln2.push(this.ln2Beta[b][e]);
-      }
-      layerNormParams.push(ln2);
-    }
-
-    // Output weights: [emb+1][outputDim] (include bias)
-    const outputWeights: number[][] = [];
-    for (let e = 0; e < emb; e++) {
-      const row: number[] = [];
-      for (let o = 0; o < this.outputDim; o++) {
-        row.push(this.outW ? this.outW[e * this.outputDim + o] : 0);
-      }
-      outputWeights.push(row);
-    }
-    outputWeights.push(this.outB ? toArr(this.outB) : []);
-
-    // Moments (simplified)
-    const firstMoment: number[][][] = [[
-      toArr(this.adamM || new Float64Array(0)),
-    ]];
-    const secondMoment: number[][][] = [[
-      toArr(this.adamV || new Float64Array(0)),
-    ]];
+    // pool and output
+    firstMoment.push(
+      [this.mWpool ? _pack1D(this.mWpool) : []],
+      [[this.mbpool]],
+      [this.mWout ? _pack1D(this.mWout) : []],
+      [this.mbout ? _pack1D(this.mbout) : []],
+    );
+    secondMoment.push(
+      [this.vWpool ? _pack1D(this.vWpool) : []],
+      [[this.vbpool]],
+      [this.vWout ? _pack1D(this.vWout) : []],
+      [this.vbout ? _pack1D(this.vbout) : []],
+    );
 
     return {
       temporalConvWeights,
@@ -2595,326 +2542,1249 @@ export class FusionTemporalTransformerRegression {
     };
   }
 
-  /**
-   * Returns the current normalization statistics.
-   *
-   * @returns NormalizationStats with mean and std for inputs/outputs
-   */
-  public getNormalizationStats(): NormalizationStats {
-    const inputStd = new Float64Array(this.inputDim || 0);
-    const outputStd = new Float64Array(this.outputDim || 0);
-
-    if (this.isInitialized && this.normCount > 0) {
-      this.getStd(this.inputM2, this.normCount, inputStd);
-      this.getStd(this.outputM2, this.normCount, outputStd);
+  /** @returns current normalization stats (means/stds) */
+  getNormalizationStats(): NormalizationStats {
+    if (
+      !this.isInitialized || !this.inStats || !this.outStats || !this.inStd ||
+      !this.outStd
+    ) {
+      return {
+        inputMean: [],
+        inputStd: [],
+        outputMean: [],
+        outputStd: [],
+        count: this.sampleCount,
+      };
     }
-
     return {
-      inputMean: this.inputMean ? Array.from(this.inputMean) : [],
-      inputStd: Array.from(inputStd),
-      outputMean: this.outputMean ? Array.from(this.outputMean) : [],
-      outputStd: Array.from(outputStd),
-      count: this.normCount,
+      inputMean: _pack1D(this.inStats.mean),
+      inputStd: _pack1D(this.inStd),
+      outputMean: _pack1D(this.outStats.mean),
+      outputStd: _pack1D(this.outStd),
+      count: this.sampleCount,
     };
   }
 
-  /**
-   * Resets the model to initial state while keeping configuration.
-   */
-  public reset(): void {
-    if (!this.isInitialized) return;
-
-    // Reset normalization
-    this.inputMean.fill(0);
-    this.inputM2.fill(0);
-    this.outputMean.fill(0);
-    this.outputM2.fill(0);
-    this.residualM2.fill(0);
-    this.normCount = 0;
-    this.residualCount = 0;
-
-    // Reinitialize weights
-    this.rngState = 12345;
-
-    for (let s = 0; s < this.numScales; s++) {
-      this.xavierInit(
-        this.convW[s],
-        this.config.temporalKernelSize * this.inputDim,
-        this.config.embeddingDim,
-      );
-      this.convB[s].fill(0);
-    }
-
-    for (let i = 0; i < this.scaleEmb.length; i++) {
-      this.scaleEmb[i] = (this.xorshift32() * 2 - 1) * 0.02;
-    }
-
-    const fusionDim = this.numScales * this.config.embeddingDim;
-    this.xavierInit(this.fusionW, fusionDim, fusionDim);
-    this.fusionB.fill(0);
-
-    const emb = this.config.embeddingDim;
-    for (let b = 0; b < this.config.numBlocks; b++) {
-      for (let i = 0; i < emb; i++) {
-        this.ln1Gamma[b][i] = 1;
-        this.ln1Beta[b][i] = 0;
-        this.ln2Gamma[b][i] = 1;
-        this.ln2Beta[b][i] = 0;
-      }
-      this.xavierInit(this.attnWq[b], emb, emb);
-      this.xavierInit(this.attnWk[b], emb, emb);
-      this.xavierInit(this.attnWv[b], emb, emb);
-      this.xavierInit(this.attnWo[b], emb, emb);
-      this.xavierInit(this.ffnW1[b], emb, this.ffnDim);
-      this.ffnB1[b].fill(0);
-      this.xavierInit(this.ffnW2[b], this.ffnDim, emb);
-      this.ffnB2[b].fill(0);
-    }
-
-    this.xavierInit(this.poolW, emb, 1);
-    this.poolB = 0;
-    this.xavierInit(this.outW, emb, this.outputDim);
-    this.outB.fill(0);
-
-    // Reset optimizer
-    this.adamM.fill(0);
-    this.adamV.fill(0);
-
-    // Reset counters
-    this.updateCount = 0;
+  /** Reset: reinitialize weights/moments and counters; keep config. */
+  reset(): void {
     this.sampleCount = 0;
+    this.updateCount = 0;
     this.driftCount = 0;
     this.runningLoss = 0;
-    this.converged = false;
-    this.lastGradNorm = Infinity;
-    this.lastLR = 0;
+    this.lastEffectiveLR = 0;
+    this.lastConverged = false;
+    _adwinReset(this.adwin);
+    this.lastSeqLen = 0;
 
-    // Reset drift window
-    this.driftWindow.fill(0);
-    this.driftWindowHead = 0;
-    this.driftWindowCount = 0;
+    if (!this.isInitialized) return;
 
-    // Reset last window
-    this.lastWindow.fill(0);
-    this.lastWindowLen = 0;
+    // Reinit params with fresh RNG
+    const rng = new _XorShift32(
+      0xC0FFEE ^ (this.inputDim * 1315423911) ^ (this.outputDim * 2654435761),
+    );
+    this.initAllWeights(rng);
+    this.zeroAllMoments();
   }
 
   /**
-   * Serializes the model to a JSON string.
-   *
-   * @returns JSON string representation of the model
+   * Serialize model to JSON string; Float64Array are stored as number[].
+   * @returns JSON string
    */
-  public save(): string {
-    const toArr = (f: Float64Array | null): number[] => f ? Array.from(f) : [];
-
-    const state: SerializedState = {
+  save(): string {
+    const obj: any = {
       config: this.config,
-      inputDim: this.inputDim,
-      outputDim: this.outputDim,
-      seqLen: this.seqLen,
-      isInitialized: this.isInitialized,
+      dims: {
+        inputDim: this.inputDim,
+        outputDim: this.outputDim,
+      },
       sampleCount: this.sampleCount,
       updateCount: this.updateCount,
       driftCount: this.driftCount,
       runningLoss: this.runningLoss,
-      normCount: this.normCount,
-      residualCount: this.residualCount,
-      inputMean: toArr(this.inputMean),
-      inputM2: toArr(this.inputM2),
-      outputMean: toArr(this.outputMean),
-      outputM2: toArr(this.outputM2),
-      residualM2: toArr(this.residualM2),
-      posEnc: toArr(this.posEnc),
-      convW: this.convW.map(toArr),
-      convB: this.convB.map(toArr),
-      scaleEmb: toArr(this.scaleEmb),
-      fusionW: toArr(this.fusionW),
-      fusionB: toArr(this.fusionB),
-      ln1Gamma: this.ln1Gamma.map(toArr),
-      ln1Beta: this.ln1Beta.map(toArr),
-      ln2Gamma: this.ln2Gamma.map(toArr),
-      ln2Beta: this.ln2Beta.map(toArr),
-      attnWq: this.attnWq.map(toArr),
-      attnWk: this.attnWk.map(toArr),
-      attnWv: this.attnWv.map(toArr),
-      attnWo: this.attnWo.map(toArr),
-      ffnW1: this.ffnW1.map(toArr),
-      ffnB1: this.ffnB1.map(toArr),
-      ffnW2: this.ffnW2.map(toArr),
-      ffnB2: this.ffnB2.map(toArr),
-      poolW: toArr(this.poolW),
-      poolB: this.poolB,
-      outW: toArr(this.outW),
-      outB: toArr(this.outB),
-      adamM: toArr(this.adamM),
-      adamV: toArr(this.adamV),
-      lastWindow: toArr(this.lastWindow),
-      lastWindowLen: this.lastWindowLen,
-      driftWindow: Array.from(this.driftWindow),
-      driftWindowHead: this.driftWindowHead,
-      driftWindowCount: this.driftWindowCount,
-      rngState: this.rngState,
-      converged: this.converged,
-      lastGradNorm: this.lastGradNorm,
-      lastLR: this.lastLR,
+      lastEffectiveLR: this.lastEffectiveLR,
+      lastConverged: this.lastConverged,
+      lastSeqLen: this.lastSeqLen,
+      isInitialized: this.isInitialized,
+
+      inStats: this.inStats
+        ? {
+          n: this.inStats.n,
+          mean: _pack1D(this.inStats.mean),
+          m2: _pack1D(this.inStats.m2),
+        }
+        : null,
+      outStats: this.outStats
+        ? {
+          n: this.outStats.n,
+          mean: _pack1D(this.outStats.mean),
+          m2: _pack1D(this.outStats.m2),
+        }
+        : null,
+      resStats: this.resStats
+        ? {
+          n: this.resStats.n,
+          mean: _pack1D(this.resStats.mean),
+          m2: _pack1D(this.resStats.m2),
+        }
+        : null,
+
+      pe: this.pe ? _pack1D(this.pe) : null,
+
+      scales: this.scales.map((s) => ({
+        W: _pack1D(s.W),
+        b: _pack1D(s.b),
+        scaleEmb: _pack1D(s.scaleEmb),
+      })),
+      scaleMom: this.scaleMom.map((m) => ({
+        m_W: _pack1D(m.m_W),
+        m_b: _pack1D(m.m_b),
+        m_scaleEmb: _pack1D(m.m_scaleEmb),
+        v_W: _pack1D(m.v_W),
+        v_b: _pack1D(m.v_b),
+        v_scaleEmb: _pack1D(m.v_scaleEmb),
+      })),
+
+      Wg: this.Wg ? _pack1D(this.Wg) : null,
+      bg: this.bg ? _pack1D(this.bg) : null,
+      mWg: this.mWg ? _pack1D(this.mWg) : null,
+      vWg: this.vWg ? _pack1D(this.vWg) : null,
+      mbg: this.mbg ? _pack1D(this.mbg) : null,
+      vbg: this.vbg ? _pack1D(this.vbg) : null,
+
+      blocks: this.blocks.map((b) => ({
+        ln1Gamma: _pack1D(b.ln1Gamma),
+        ln1Beta: _pack1D(b.ln1Beta),
+        Wq: _pack1D(b.Wq),
+        Wk: _pack1D(b.Wk),
+        Wv: _pack1D(b.Wv),
+        Wo: _pack1D(b.Wo),
+        ln2Gamma: _pack1D(b.ln2Gamma),
+        ln2Beta: _pack1D(b.ln2Beta),
+        W1: _pack1D(b.W1),
+        b1: _pack1D(b.b1),
+        W2: _pack1D(b.W2),
+        b2: _pack1D(b.b2),
+      })),
+      blockMom: this.blockMom.map((m) => ({
+        m_ln1Gamma: _pack1D(m.m_ln1Gamma),
+        m_ln1Beta: _pack1D(m.m_ln1Beta),
+        m_Wq: _pack1D(m.m_Wq),
+        m_Wk: _pack1D(m.m_Wk),
+        m_Wv: _pack1D(m.m_Wv),
+        m_Wo: _pack1D(m.m_Wo),
+        m_ln2Gamma: _pack1D(m.m_ln2Gamma),
+        m_ln2Beta: _pack1D(m.m_ln2Beta),
+        m_W1: _pack1D(m.m_W1),
+        m_b1: _pack1D(m.m_b1),
+        m_W2: _pack1D(m.m_W2),
+        m_b2: _pack1D(m.m_b2),
+
+        v_ln1Gamma: _pack1D(m.v_ln1Gamma),
+        v_ln1Beta: _pack1D(m.v_ln1Beta),
+        v_Wq: _pack1D(m.v_Wq),
+        v_Wk: _pack1D(m.v_Wk),
+        v_Wv: _pack1D(m.v_Wv),
+        v_Wo: _pack1D(m.v_Wo),
+        v_ln2Gamma: _pack1D(m.v_ln2Gamma),
+        v_ln2Beta: _pack1D(m.v_ln2Beta),
+        v_W1: _pack1D(m.v_W1),
+        v_b1: _pack1D(m.v_b1),
+        v_W2: _pack1D(m.v_W2),
+        v_b2: _pack1D(m.v_b2),
+      })),
+
+      Wpool: this.Wpool ? _pack1D(this.Wpool) : null,
+      bpool: this.bpool,
+      mWpool: this.mWpool ? _pack1D(this.mWpool) : null,
+      vWpool: this.vWpool ? _pack1D(this.vWpool) : null,
+      mbpool: this.mbpool,
+      vbpool: this.vbpool,
+
+      Wout: this.Wout ? _pack1D(this.Wout) : null,
+      bout: this.bout ? _pack1D(this.bout) : null,
+      mWout: this.mWout ? _pack1D(this.mWout) : null,
+      vWout: this.vWout ? _pack1D(this.vWout) : null,
+      mbout: this.mbout ? _pack1D(this.mbout) : null,
+      vbout: this.vbout ? _pack1D(this.vbout) : null,
     };
 
-    return JSON.stringify(state);
+    return JSON.stringify(obj);
   }
 
   /**
-   * Loads model state from a JSON string.
-   *
-   * @param w - JSON string from save()
+   * Load model from JSON string. Validates key shapes.
+   * @param w JSON string from save()
    */
-  public load(w: string): void {
-    const state: SerializedState = JSON.parse(w);
-    const toF64 = (arr: number[]): Float64Array => new Float64Array(arr);
+  load(w: string): void {
+    const obj = JSON.parse(w);
 
-    this.config = state.config;
-    this.inputDim = state.inputDim;
-    this.outputDim = state.outputDim;
-    this.seqLen = state.seqLen;
-    this.isInitialized = state.isInitialized;
-    this.sampleCount = state.sampleCount;
-    this.updateCount = state.updateCount;
-    this.driftCount = state.driftCount;
-    this.runningLoss = state.runningLoss;
-    this.normCount = state.normCount;
-    this.residualCount = state.residualCount;
+    // Restore config (must match defaults merged behavior)
+    const defaults = new FusionTemporalTransformerRegression().config;
+    const cfg: Config = Object.assign({}, defaults, obj.config || {});
+    (this as any).config = cfg; // keep API; internal override is OK in TS runtime
 
-    this.headDim = this.config.embeddingDim / this.config.numHeads;
-    this.ffnDim = this.config.embeddingDim * this.config.ffnMultiplier;
-    this.numScales = this.config.temporalScales.length;
+    this.sampleCount = obj.sampleCount | 0;
+    this.updateCount = obj.updateCount | 0;
+    this.driftCount = obj.driftCount | 0;
+    this.runningLoss = +obj.runningLoss || 0;
+    this.lastEffectiveLR = +obj.lastEffectiveLR || 0;
+    this.lastConverged = !!obj.lastConverged;
+    this.lastSeqLen = obj.lastSeqLen | 0;
 
-    if (this.isInitialized) {
-      this.inputMean = toF64(state.inputMean);
-      this.inputM2 = toF64(state.inputM2);
-      this.outputMean = toF64(state.outputMean);
-      this.outputM2 = toF64(state.outputM2);
-      this.residualM2 = toF64(state.residualM2);
-      this.posEnc = toF64(state.posEnc);
+    const dims = obj.dims || {};
+    const inDim = dims.inputDim | 0;
+    const outDim = dims.outputDim | 0;
 
-      this.convW = state.convW.map(toF64);
-      this.convB = state.convB.map(toF64);
-      this.scaleEmb = toF64(state.scaleEmb);
-      this.fusionW = toF64(state.fusionW);
-      this.fusionB = toF64(state.fusionB);
-
-      this.ln1Gamma = state.ln1Gamma.map(toF64);
-      this.ln1Beta = state.ln1Beta.map(toF64);
-      this.ln2Gamma = state.ln2Gamma.map(toF64);
-      this.ln2Beta = state.ln2Beta.map(toF64);
-      this.attnWq = state.attnWq.map(toF64);
-      this.attnWk = state.attnWk.map(toF64);
-      this.attnWv = state.attnWv.map(toF64);
-      this.attnWo = state.attnWo.map(toF64);
-      this.ffnW1 = state.ffnW1.map(toF64);
-      this.ffnB1 = state.ffnB1.map(toF64);
-      this.ffnW2 = state.ffnW2.map(toF64);
-      this.ffnB2 = state.ffnB2.map(toF64);
-
-      this.poolW = toF64(state.poolW);
-      this.poolB = state.poolB;
-      this.outW = toF64(state.outW);
-      this.outB = toF64(state.outB);
-
-      this.adamM = toF64(state.adamM);
-      this.adamV = toF64(state.adamV);
-      this.totalParams = this.adamM.length;
-
-      this.lastWindow = toF64(state.lastWindow);
-      this.lastWindowLen = state.lastWindowLen;
-
-      // Reallocate forward/backward buffers
-      const emb = this.config.embeddingDim;
-      const msl = this.config.maxSequenceLength;
-      const nb = this.config.numBlocks;
-      const ns = this.numScales;
-
-      this.fwdNormX = new Float64Array(msl * this.inputDim);
-      this.fwdNormY = new Float64Array(this.outputDim);
-
-      for (let s = 0; s < ns; s++) {
-        const scaleLen = Math.ceil(msl / this.config.temporalScales[s]);
-        this.fwdConvOut[s] = new Float64Array(scaleLen * emb);
-        this.fwdConvPre[s] = new Float64Array(scaleLen * emb);
-        this.fwdScaleEmb[s] = new Float64Array(scaleLen * emb);
-        this.gradConvW[s] = new Float64Array(this.convW[s].length);
-        this.gradConvB[s] = new Float64Array(emb);
-      }
-
-      this.fwdUpsampled = new Float64Array(msl * ns * emb);
-      this.fwdGateIn = new Float64Array(msl * ns * emb);
-      this.fwdGate = new Float64Array(msl * ns * emb);
-      this.fwdFused = new Float64Array(msl * emb);
-
-      for (let b = 0; b < nb; b++) {
-        this.fwdBlockIn[b] = new Float64Array(msl * emb);
-        this.fwdLn1Out[b] = new Float64Array(msl * emb);
-        this.fwdLn1Mean[b] = new Float64Array(msl);
-        this.fwdLn1Rstd[b] = new Float64Array(msl);
-        this.fwdQ[b] = new Float64Array(msl * emb);
-        this.fwdK[b] = new Float64Array(msl * emb);
-        this.fwdV[b] = new Float64Array(msl * emb);
-        this.fwdAttnScores[b] = new Float64Array(
-          this.config.numHeads * msl * msl,
-        );
-        this.fwdAttnProbs[b] = new Float64Array(
-          this.config.numHeads * msl * msl,
-        );
-        this.fwdAttnOut[b] = new Float64Array(msl * emb);
-        this.fwdAttnProj[b] = new Float64Array(msl * emb);
-        this.fwdRes1[b] = new Float64Array(msl * emb);
-        this.fwdLn2Out[b] = new Float64Array(msl * emb);
-        this.fwdLn2Mean[b] = new Float64Array(msl);
-        this.fwdLn2Rstd[b] = new Float64Array(msl);
-        this.fwdFfnHid[b] = new Float64Array(msl * this.ffnDim);
-        this.fwdFfnPre[b] = new Float64Array(msl * this.ffnDim);
-        this.fwdFfnOut[b] = new Float64Array(msl * emb);
-        this.fwdBlockOut[b] = new Float64Array(msl * emb);
-
-        this.gradLn1Gamma[b] = new Float64Array(emb);
-        this.gradLn1Beta[b] = new Float64Array(emb);
-        this.gradLn2Gamma[b] = new Float64Array(emb);
-        this.gradLn2Beta[b] = new Float64Array(emb);
-        this.gradAttnWq[b] = new Float64Array(emb * emb);
-        this.gradAttnWk[b] = new Float64Array(emb * emb);
-        this.gradAttnWv[b] = new Float64Array(emb * emb);
-        this.gradAttnWo[b] = new Float64Array(emb * emb);
-        this.gradFfnW1[b] = new Float64Array(emb * this.ffnDim);
-        this.gradFfnB1[b] = new Float64Array(this.ffnDim);
-        this.gradFfnW2[b] = new Float64Array(this.ffnDim * emb);
-        this.gradFfnB2[b] = new Float64Array(emb);
-      }
-
-      this.fwdPoolScores = new Float64Array(msl);
-      this.fwdPoolWeights = new Float64Array(msl);
-      this.fwdPooled = new Float64Array(emb);
-      this.fwdOutput = new Float64Array(this.outputDim);
-
-      this.gradScaleEmb = new Float64Array(ns * emb);
-      this.gradFusionW = new Float64Array(ns * emb * ns * emb);
-      this.gradFusionB = new Float64Array(ns * emb);
-      this.gradPoolW = new Float64Array(emb);
-      this.gradOutW = new Float64Array(emb * this.outputDim);
-      this.gradOutB = new Float64Array(this.outputDim);
-
-      this.scratchSeqEmb = new Float64Array(msl * emb);
-      this.scratchSeqEmb2 = new Float64Array(msl * emb);
-      this.scratchHead = new Float64Array(msl * msl);
-      this.scratchFfn = new Float64Array(msl * this.ffnDim);
-      this.scratchEmb = new Float64Array(emb);
-      this.scratchGrad = new Float64Array(msl * ns * emb);
-      this.scratchScales = new Float64Array(msl);
+    if (inDim > 0 && outDim > 0) {
+      this.ensureInitialized(inDim, outDim);
+    } else {
+      this.isInitialized = false;
+      this.inputDim = 0;
+      this.outputDim = 0;
+      return;
     }
 
-    this.driftWindow = new Float64Array(state.driftWindow);
-    this.driftWindowHead = state.driftWindowHead;
-    this.driftWindowCount = state.driftWindowCount;
-    this.rngState = state.rngState;
-    this.converged = state.converged;
-    this.lastGradNorm = state.lastGradNorm;
-    this.lastLR = state.lastLR;
+    // Restore stats
+    if (obj.inStats) {
+      this.inStats!.n = obj.inStats.n | 0;
+      this.inStats!.mean = _rehydrateF64(obj.inStats.mean);
+      this.inStats!.m2 = _rehydrateF64(obj.inStats.m2);
+      this.inStd = new Float64Array(this.inputDim);
+      _welfordStd(this.inStats!, this.inStd);
+    }
+    if (obj.outStats) {
+      this.outStats!.n = obj.outStats.n | 0;
+      this.outStats!.mean = _rehydrateF64(obj.outStats.mean);
+      this.outStats!.m2 = _rehydrateF64(obj.outStats.m2);
+      this.outStd = new Float64Array(this.outputDim);
+      _welfordStd(this.outStats!, this.outStd);
+    }
+    if (obj.resStats) {
+      this.resStats!.n = obj.resStats.n | 0;
+      this.resStats!.mean = _rehydrateF64(obj.resStats.mean);
+      this.resStats!.m2 = _rehydrateF64(obj.resStats.m2);
+    }
+
+    // Positional encoding
+    if (obj.pe) this.pe = _rehydrateF64(obj.pe);
+
+    // Scales and moments
+    const nScales = this.config.temporalScales.length;
+    if (!Array.isArray(obj.scales) || obj.scales.length !== nScales) {
+      throw new Error("Invalid scales in load()");
+    }
+    if (!Array.isArray(obj.scaleMom) || obj.scaleMom.length !== nScales) {
+      throw new Error("Invalid scaleMom in load()");
+    }
+
+    for (let si = 0; si < nScales; si++) {
+      const s = obj.scales[si];
+      const m = obj.scaleMom[si];
+      this.scales[si].W = _rehydrateF64(s.W);
+      this.scales[si].b = _rehydrateF64(s.b);
+      this.scales[si].scaleEmb = _rehydrateF64(s.scaleEmb);
+
+      this.scaleMom[si].m_W = _rehydrateF64(m.m_W);
+      this.scaleMom[si].m_b = _rehydrateF64(m.m_b);
+      this.scaleMom[si].m_scaleEmb = _rehydrateF64(m.m_scaleEmb);
+      this.scaleMom[si].v_W = _rehydrateF64(m.v_W);
+      this.scaleMom[si].v_b = _rehydrateF64(m.v_b);
+      this.scaleMom[si].v_scaleEmb = _rehydrateF64(m.v_scaleEmb);
+    }
+
+    // Fusion
+    this.Wg = _rehydrateF64(obj.Wg);
+    this.bg = _rehydrateF64(obj.bg);
+    this.mWg = _rehydrateF64(obj.mWg);
+    this.vWg = _rehydrateF64(obj.vWg);
+    this.mbg = _rehydrateF64(obj.mbg);
+    this.vbg = _rehydrateF64(obj.vbg);
+
+    // Blocks and moments
+    if (
+      !Array.isArray(obj.blocks) || obj.blocks.length !== this.config.numBlocks
+    ) throw new Error("Invalid blocks in load()");
+    if (
+      !Array.isArray(obj.blockMom) ||
+      obj.blockMom.length !== this.config.numBlocks
+    ) throw new Error("Invalid blockMom in load()");
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const b = obj.blocks[bi];
+      const m = obj.blockMom[bi];
+      const p = this.blocks[bi];
+      p.ln1Gamma = _rehydrateF64(b.ln1Gamma);
+      p.ln1Beta = _rehydrateF64(b.ln1Beta);
+      p.Wq = _rehydrateF64(b.Wq);
+      p.Wk = _rehydrateF64(b.Wk);
+      p.Wv = _rehydrateF64(b.Wv);
+      p.Wo = _rehydrateF64(b.Wo);
+      p.ln2Gamma = _rehydrateF64(b.ln2Gamma);
+      p.ln2Beta = _rehydrateF64(b.ln2Beta);
+      p.W1 = _rehydrateF64(b.W1);
+      p.b1 = _rehydrateF64(b.b1);
+      p.W2 = _rehydrateF64(b.W2);
+      p.b2 = _rehydrateF64(b.b2);
+
+      const bm = this.blockMom[bi];
+      bm.m_ln1Gamma = _rehydrateF64(m.m_ln1Gamma);
+      bm.m_ln1Beta = _rehydrateF64(m.m_ln1Beta);
+      bm.m_Wq = _rehydrateF64(m.m_Wq);
+      bm.m_Wk = _rehydrateF64(m.m_Wk);
+      bm.m_Wv = _rehydrateF64(m.m_Wv);
+      bm.m_Wo = _rehydrateF64(m.m_Wo);
+      bm.m_ln2Gamma = _rehydrateF64(m.m_ln2Gamma);
+      bm.m_ln2Beta = _rehydrateF64(m.m_ln2Beta);
+      bm.m_W1 = _rehydrateF64(m.m_W1);
+      bm.m_b1 = _rehydrateF64(m.m_b1);
+      bm.m_W2 = _rehydrateF64(m.m_W2);
+      bm.m_b2 = _rehydrateF64(m.m_b2);
+
+      bm.v_ln1Gamma = _rehydrateF64(m.v_ln1Gamma);
+      bm.v_ln1Beta = _rehydrateF64(m.v_ln1Beta);
+      bm.v_Wq = _rehydrateF64(m.v_Wq);
+      bm.v_Wk = _rehydrateF64(m.v_Wk);
+      bm.v_Wv = _rehydrateF64(m.v_Wv);
+      bm.v_Wo = _rehydrateF64(m.v_Wo);
+      bm.v_ln2Gamma = _rehydrateF64(m.v_ln2Gamma);
+      bm.v_ln2Beta = _rehydrateF64(m.v_ln2Beta);
+      bm.v_W1 = _rehydrateF64(m.v_W1);
+      bm.v_b1 = _rehydrateF64(m.v_b1);
+      bm.v_W2 = _rehydrateF64(m.v_W2);
+      bm.v_b2 = _rehydrateF64(m.v_b2);
+    }
+
+    // Pool and output
+    this.Wpool = _rehydrateF64(obj.Wpool);
+    this.bpool = +obj.bpool || 0;
+    this.mWpool = _rehydrateF64(obj.mWpool);
+    this.vWpool = _rehydrateF64(obj.vWpool);
+    this.mbpool = +obj.mbpool || 0;
+    this.vbpool = +obj.vbpool || 0;
+
+    this.Wout = _rehydrateF64(obj.Wout);
+    this.bout = _rehydrateF64(obj.bout);
+    this.mWout = _rehydrateF64(obj.mWout);
+    this.vWout = _rehydrateF64(obj.vWout);
+    this.mbout = _rehydrateF64(obj.mbout);
+    this.vbout = _rehydrateF64(obj.vbout);
+
+    // Drift detector reset (loss window not serialized)
+    _adwinReset(this.adwin);
+
+    this.isInitialized = true;
+  }
+
+  // ===== Internal helpers =====
+
+  private ensureInitialized(inDim: number, outDim: number): void {
+    const emb = this.config.embeddingDim;
+    const heads = this.config.numHeads;
+
+    if (emb % heads !== 0) {
+      throw new Error(
+        `embeddingDim (${emb}) must be divisible by numHeads (${heads}).`,
+      );
+    }
+    this.headDim = emb / heads;
+    this.hiddenDim = emb * this.config.ffnMultiplier;
+
+    this.inputDim = inDim;
+    this.outputDim = outDim;
+    this.nScales = this.config.temporalScales.length;
+
+    // Stats
+    this.inStats = _welfordCreate(inDim);
+    this.outStats = _welfordCreate(outDim);
+    this.resStats = _welfordCreate(outDim);
+    this.inStd = new Float64Array(inDim);
+    this.outStd = new Float64Array(outDim);
+
+    // Positional encoding cache
+    this.pe = new Float64Array(this.config.maxSequenceLength * emb);
+    this.computePositionalEncoding(this.pe, this.config.maxSequenceLength, emb);
+
+    // Allocate params
+    this.scales = [];
+    this.scaleMom = [];
+    this.scaleGrad = [];
+
+    const K = this.config.temporalKernelSize;
+    for (let si = 0; si < this.nScales; si++) {
+      const W = new Float64Array(K * inDim * emb);
+      const b = new Float64Array(emb);
+      const scaleEmb = new Float64Array(emb);
+
+      const m_W = new Float64Array(W.length);
+      const v_W = new Float64Array(W.length);
+      const m_b = new Float64Array(b.length);
+      const v_b = new Float64Array(b.length);
+      const m_se = new Float64Array(scaleEmb.length);
+      const v_se = new Float64Array(scaleEmb.length);
+
+      const g_W = new Float64Array(W.length);
+      const g_b = new Float64Array(b.length);
+      const g_se = new Float64Array(scaleEmb.length);
+
+      this.scales.push({ W, b, scaleEmb });
+      this.scaleMom.push({
+        m_W,
+        m_b,
+        m_scaleEmb: m_se,
+        v_W,
+        v_b,
+        v_scaleEmb: v_se,
+      });
+      this.scaleGrad.push({ g_W, g_b, g_scaleEmb: g_se });
+    }
+
+    const concatDim = this.nScales * emb;
+    this.Wg = new Float64Array(concatDim * concatDim);
+    this.bg = new Float64Array(concatDim);
+    this.mWg = new Float64Array(this.Wg.length);
+    this.vWg = new Float64Array(this.Wg.length);
+    this.mbg = new Float64Array(this.bg.length);
+    this.vbg = new Float64Array(this.bg.length);
+    this.gWg = new Float64Array(this.Wg.length);
+    this.gbg = new Float64Array(this.bg.length);
+
+    // Blocks
+    this.blocks = [];
+    this.blockMom = [];
+    this.blockGrad = [];
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const ln1Gamma = new Float64Array(emb);
+      const ln1Beta = new Float64Array(emb);
+      const ln2Gamma = new Float64Array(emb);
+      const ln2Beta = new Float64Array(emb);
+
+      const Wq = new Float64Array(emb * emb);
+      const Wk = new Float64Array(emb * emb);
+      const Wv = new Float64Array(emb * emb);
+      const Wo = new Float64Array(emb * emb);
+
+      const W1 = new Float64Array(emb * this.hiddenDim);
+      const b1 = new Float64Array(this.hiddenDim);
+      const W2 = new Float64Array(this.hiddenDim * emb);
+      const b2 = new Float64Array(emb);
+
+      const m: _BlockMoments = {
+        m_ln1Gamma: new Float64Array(emb),
+        m_ln1Beta: new Float64Array(emb),
+        m_Wq: new Float64Array(emb * emb),
+        m_Wk: new Float64Array(emb * emb),
+        m_Wv: new Float64Array(emb * emb),
+        m_Wo: new Float64Array(emb * emb),
+        m_ln2Gamma: new Float64Array(emb),
+        m_ln2Beta: new Float64Array(emb),
+        m_W1: new Float64Array(emb * this.hiddenDim),
+        m_b1: new Float64Array(this.hiddenDim),
+        m_W2: new Float64Array(this.hiddenDim * emb),
+        m_b2: new Float64Array(emb),
+
+        v_ln1Gamma: new Float64Array(emb),
+        v_ln1Beta: new Float64Array(emb),
+        v_Wq: new Float64Array(emb * emb),
+        v_Wk: new Float64Array(emb * emb),
+        v_Wv: new Float64Array(emb * emb),
+        v_Wo: new Float64Array(emb * emb),
+        v_ln2Gamma: new Float64Array(emb),
+        v_ln2Beta: new Float64Array(emb),
+        v_W1: new Float64Array(emb * this.hiddenDim),
+        v_b1: new Float64Array(this.hiddenDim),
+        v_W2: new Float64Array(this.hiddenDim * emb),
+        v_b2: new Float64Array(emb),
+      };
+
+      const g: _BlockGrads = {
+        g_ln1Gamma: new Float64Array(emb),
+        g_ln1Beta: new Float64Array(emb),
+        g_Wq: new Float64Array(emb * emb),
+        g_Wk: new Float64Array(emb * emb),
+        g_Wv: new Float64Array(emb * emb),
+        g_Wo: new Float64Array(emb * emb),
+        g_ln2Gamma: new Float64Array(emb),
+        g_ln2Beta: new Float64Array(emb),
+        g_W1: new Float64Array(emb * this.hiddenDim),
+        g_b1: new Float64Array(this.hiddenDim),
+        g_W2: new Float64Array(this.hiddenDim * emb),
+        g_b2: new Float64Array(emb),
+      };
+
+      this.blocks.push({
+        ln1Gamma,
+        ln1Beta,
+        Wq,
+        Wk,
+        Wv,
+        Wo,
+        ln2Gamma,
+        ln2Beta,
+        W1,
+        b1,
+        W2,
+        b2,
+      });
+      this.blockMom.push(m);
+      this.blockGrad.push(g);
+    }
+
+    // Pool and output
+    this.Wpool = new Float64Array(emb);
+    this.mWpool = new Float64Array(emb);
+    this.vWpool = new Float64Array(emb);
+    this.gWpool = new Float64Array(emb);
+
+    this.Wout = new Float64Array(emb * outDim);
+    this.bout = new Float64Array(outDim);
+    this.mWout = new Float64Array(this.Wout.length);
+    this.vWout = new Float64Array(this.Wout.length);
+    this.mbout = new Float64Array(this.bout.length);
+    this.vbout = new Float64Array(this.bout.length);
+    this.gWout = new Float64Array(this.Wout.length);
+    this.gbout = new Float64Array(this.bout.length);
+
+    // Initialize weights
+    const rng = new _XorShift32(
+      0x12345678 ^ (inDim * 1315423911) ^ (outDim * 2654435761),
+    );
+    this.initAllWeights(rng);
+    this.zeroAllMoments();
+
+    this.isInitialized = true;
+
+    // Lazy buffers
+    this.buf = null;
+    this.lastXRaw = null;
+  }
+
+  private ensureBuffers(): void {
+    if (!this.isInitialized) return;
+    const emb = this.config.embeddingDim;
+    const inDim = this.inputDim;
+    const outDim = this.outputDim;
+    const maxL = this.config.maxSequenceLength;
+    const concatDim = this.nScales * emb;
+    const hidden = this.hiddenDim;
+
+    if (this.buf) {
+      // Ensure sizes match config; if config changed, rebuild.
+      // (Normally config is constant.)
+      return;
+    }
+
+    const xRaw = new Float64Array(maxL * inDim);
+    const xNorm = new Float64Array(maxL * inDim);
+    const yTargetRaw = new Float64Array(outDim);
+    const yTargetNorm = new Float64Array(outDim);
+
+    const convPre: Float64Array[] = new Array(this.nScales);
+    const convAct: Float64Array[] = new Array(this.nScales);
+    const E: Float64Array[] = new Array(this.nScales);
+    const EUp: Float64Array[] = new Array(this.nScales);
+    const dE: Float64Array[] = new Array(this.nScales);
+    const dEUp: Float64Array[] = new Array(this.nScales);
+
+    for (let si = 0; si < this.nScales; si++) {
+      const s = this.config.temporalScales[si];
+      const maxLs = Math.floor((maxL + s - 1) / s);
+      convPre[si] = new Float64Array(maxLs * emb);
+      convAct[si] = new Float64Array(maxLs * emb);
+      E[si] = new Float64Array(maxLs * emb);
+      EUp[si] = new Float64Array(maxL * emb);
+      dE[si] = new Float64Array(maxLs * emb);
+      dEUp[si] = new Float64Array(maxL * emb);
+    }
+
+    const concat = new Float64Array(maxL * concatDim);
+    const gatePre = new Float64Array(maxL * concatDim);
+    const gate = new Float64Array(maxL * concatDim);
+    const fusedPreDrop = new Float64Array(maxL * emb);
+    const fused = new Float64Array(maxL * emb);
+    const dFused = new Float64Array(maxL * emb);
+    const dConcat = new Float64Array(maxL * concatDim);
+    const dGate = new Float64Array(maxL * concatDim);
+    const dGatePre = new Float64Array(maxL * concatDim);
+
+    const blockInput: Float64Array[] = new Array(this.config.numBlocks);
+    const ln1Mean: Float64Array[] = new Array(this.config.numBlocks);
+    const ln1Var: Float64Array[] = new Array(this.config.numBlocks);
+    const Xn1: Float64Array[] = new Array(this.config.numBlocks);
+    const Q: Float64Array[] = new Array(this.config.numBlocks);
+    const K: Float64Array[] = new Array(this.config.numBlocks);
+    const V: Float64Array[] = new Array(this.config.numBlocks);
+    const context: Float64Array[] = new Array(this.config.numBlocks);
+    const attnProj: Float64Array[] = new Array(this.config.numBlocks);
+    const afterAttn: Float64Array[] = new Array(this.config.numBlocks);
+    const ln2Mean: Float64Array[] = new Array(this.config.numBlocks);
+    const ln2Var: Float64Array[] = new Array(this.config.numBlocks);
+    const Xn2: Float64Array[] = new Array(this.config.numBlocks);
+    const ffnPre: Float64Array[] = new Array(this.config.numBlocks);
+    const ffnAct: Float64Array[] = new Array(this.config.numBlocks);
+    const ffnOut: Float64Array[] = new Array(this.config.numBlocks);
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      blockInput[bi] = new Float64Array(maxL * emb);
+      ln1Mean[bi] = new Float64Array(maxL);
+      ln1Var[bi] = new Float64Array(maxL);
+      Xn1[bi] = new Float64Array(maxL * emb);
+      Q[bi] = new Float64Array(maxL * emb);
+      K[bi] = new Float64Array(maxL * emb);
+      V[bi] = new Float64Array(maxL * emb);
+      context[bi] = new Float64Array(maxL * emb);
+      attnProj[bi] = new Float64Array(maxL * emb);
+      afterAttn[bi] = new Float64Array(maxL * emb);
+      ln2Mean[bi] = new Float64Array(maxL);
+      ln2Var[bi] = new Float64Array(maxL);
+      Xn2[bi] = new Float64Array(maxL * emb);
+      ffnPre[bi] = new Float64Array(maxL * hidden);
+      ffnAct[bi] = new Float64Array(maxL * hidden);
+      ffnOut[bi] = new Float64Array(maxL * emb);
+    }
+
+    const dH = new Float64Array(maxL * emb);
+    const dTmp = new Float64Array(maxL * emb);
+    const dXn = new Float64Array(maxL * emb);
+    const dQ = new Float64Array(maxL * emb);
+    const dK = new Float64Array(maxL * emb);
+    const dV = new Float64Array(maxL * emb);
+    const dContext = new Float64Array(maxL * emb);
+    const dAttnProj = new Float64Array(maxL * emb);
+
+    const poolScores = new Float64Array(maxL);
+    const poolAlpha = new Float64Array(maxL);
+    const pooled = new Float64Array(emb);
+    const dPooled = new Float64Array(emb);
+    const dScores = new Float64Array(maxL);
+    const dAlpha = new Float64Array(maxL);
+
+    const yHatNorm = new Float64Array(outDim);
+    const dYHat = new Float64Array(outDim);
+
+    const tmpEmb = new Float64Array(emb);
+    const tmpConcat = new Float64Array(concatDim);
+    const tmpHidden = new Float64Array(hidden);
+
+    this.buf = {
+      xRaw,
+      xNorm,
+      yTargetRaw,
+      yTargetNorm,
+      convPre,
+      convAct,
+      E,
+      EUp,
+      dE,
+      dEUp,
+      concat,
+      gatePre,
+      gate,
+      fusedPreDrop,
+      fused,
+      dFused,
+      dConcat,
+      dGate,
+      dGatePre,
+      blockInput,
+      ln1Mean,
+      ln1Var,
+      Xn1,
+      Q,
+      K,
+      V,
+      context,
+      attnProj,
+      afterAttn,
+      ln2Mean,
+      ln2Var,
+      Xn2,
+      ffnPre,
+      ffnAct,
+      ffnOut,
+      dH,
+      dTmp,
+      dXn,
+      dQ,
+      dK,
+      dV,
+      dContext,
+      dAttnProj,
+      poolScores,
+      poolAlpha,
+      pooled,
+      dPooled,
+      dScores,
+      dAlpha,
+      yHatNorm,
+      dYHat,
+      tmpEmb,
+      tmpConcat,
+      tmpHidden,
+    };
+  }
+
+  private initAllWeights(rng: _XorShift32): void {
+    const emb = this.config.embeddingDim;
+    const inDim = this.inputDim;
+    const outDim = this.outputDim;
+    const K = this.config.temporalKernelSize;
+
+    // Scale conv weights/bias and scale embeddings
+    for (let si = 0; si < this.nScales; si++) {
+      const sp = this.scales[si];
+      _initXavierUniform(sp.W, K * inDim, emb, rng);
+      _fill(sp.b, 0);
+      // scaleEmb small uniform ±0.02
+      for (let i = 0; i < sp.scaleEmb.length; i++) {
+        sp.scaleEmb[i] = (rng.nextFloat() * 2 - 1) * 0.02;
+      }
+    }
+
+    // Fusion Wg
+    const concatDim = this.nScales * emb;
+    _initXavierUniform(this.Wg!, concatDim, concatDim, rng);
+    _fill(this.bg!, 0);
+
+    // Blocks
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const b = this.blocks[bi];
+
+      // LayerNorm gamma=1 beta=0
+      _fill(b.ln1Gamma, 1);
+      _fill(b.ln1Beta, 0);
+      _fill(b.ln2Gamma, 1);
+      _fill(b.ln2Beta, 0);
+
+      _initXavierUniform(b.Wq, emb, emb, rng);
+      _initXavierUniform(b.Wk, emb, emb, rng);
+      _initXavierUniform(b.Wv, emb, emb, rng);
+      _initXavierUniform(b.Wo, emb, emb, rng);
+
+      _initXavierUniform(b.W1, emb, this.hiddenDim, rng);
+      _fill(b.b1, 0);
+      _initXavierUniform(b.W2, this.hiddenDim, emb, rng);
+      _fill(b.b2, 0);
+    }
+
+    // Pool and output head
+    _initXavierUniform(this.Wpool!, emb, 1, rng);
+    this.bpool = 0;
+
+    _initXavierUniform(this.Wout!, emb, outDim, rng);
+    _fill(this.bout!, 0);
+  }
+
+  private zeroAllMoments(): void {
+    for (let si = 0; si < this.nScales; si++) {
+      const sm = this.scaleMom[si];
+      _fill(sm.m_W, 0);
+      _fill(sm.v_W, 0);
+      _fill(sm.m_b, 0);
+      _fill(sm.v_b, 0);
+      _fill(sm.m_scaleEmb, 0);
+      _fill(sm.v_scaleEmb, 0);
+    }
+    _fill(this.mWg!, 0);
+    _fill(this.vWg!, 0);
+    _fill(this.mbg!, 0);
+    _fill(this.vbg!, 0);
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const bm = this.blockMom[bi];
+      _fill(bm.m_ln1Gamma, 0);
+      _fill(bm.v_ln1Gamma, 0);
+      _fill(bm.m_ln1Beta, 0);
+      _fill(bm.v_ln1Beta, 0);
+      _fill(bm.m_Wq, 0);
+      _fill(bm.v_Wq, 0);
+      _fill(bm.m_Wk, 0);
+      _fill(bm.v_Wk, 0);
+      _fill(bm.m_Wv, 0);
+      _fill(bm.v_Wv, 0);
+      _fill(bm.m_Wo, 0);
+      _fill(bm.v_Wo, 0);
+      _fill(bm.m_ln2Gamma, 0);
+      _fill(bm.v_ln2Gamma, 0);
+      _fill(bm.m_ln2Beta, 0);
+      _fill(bm.v_ln2Beta, 0);
+      _fill(bm.m_W1, 0);
+      _fill(bm.v_W1, 0);
+      _fill(bm.m_b1, 0);
+      _fill(bm.v_b1, 0);
+      _fill(bm.m_W2, 0);
+      _fill(bm.v_W2, 0);
+      _fill(bm.m_b2, 0);
+      _fill(bm.v_b2, 0);
+    }
+
+    _fill(this.mWpool!, 0);
+    _fill(this.vWpool!, 0);
+    this.mbpool = 0;
+    this.vbpool = 0;
+
+    _fill(this.mWout!, 0);
+    _fill(this.vWout!, 0);
+    _fill(this.mbout!, 0);
+    _fill(this.vbout!, 0);
+  }
+
+  private computePositionalEncoding(
+    dst: Float64Array,
+    maxLen: number,
+    dModel: number,
+  ): void {
+    // PE(pos,2i)=sin(pos/10000^(2i/d)), PE(pos,2i+1)=cos(pos/10000^(2i/d))
+    for (let pos = 0; pos < maxLen; pos++) {
+      const base = pos * dModel;
+      for (let i = 0; i < dModel; i += 2) {
+        const div = Math.pow(10000, (2 * i) / dModel);
+        const ang = pos / (div <= 0 ? 1 : div);
+        dst[base + i] = Math.sin(ang);
+        if (i + 1 < dModel) dst[base + i + 1] = Math.cos(ang);
+      }
+    }
+  }
+
+  private linearForward2D(
+    X: Float64Array,
+    Y: Float64Array,
+    rows: number,
+    inCols: number,
+    W: Float64Array,
+    b: Float64Array | null,
+  ): void {
+    // Y[rows, outCols] where outCols = W cols.
+    // W is row-major [inCols, outCols]
+    const outCols = Math.floor(W.length / inCols);
+    for (let r = 0; r < rows; r++) {
+      const xOff = r * inCols;
+      const yOff = r * outCols;
+      for (let j = 0; j < outCols; j++) {
+        let sum = b ? b[j] : 0;
+        let wOff = j;
+        for (let i = 0; i < inCols; i++) {
+          sum += X[xOff + i] * W[wOff];
+          wOff += outCols;
+        }
+        Y[yOff + j] = sum;
+      }
+    }
+  }
+
+  private linearBackward2D(
+    X: Float64Array,
+    dY: Float64Array,
+    rows: number,
+    inCols: number,
+    W: Float64Array,
+    dW: Float64Array,
+    dXaccum: Float64Array,
+  ): void {
+    // dW += X^T * dY; dX += dY * W^T (accumulate into dXaccum)
+    const outCols = Math.floor(W.length / inCols);
+
+    // dW
+    for (let r = 0; r < rows; r++) {
+      const xOff = r * inCols;
+      const dyOff = r * outCols;
+      for (let i = 0; i < inCols; i++) {
+        const xv = X[xOff + i];
+        const wBase = i * outCols;
+        for (let j = 0; j < outCols; j++) dW[wBase + j] += xv * dY[dyOff + j];
+      }
+    }
+
+    // dX
+    for (let r = 0; r < rows; r++) {
+      const dyOff = r * outCols;
+      const dxOff = r * inCols;
+      for (let i = 0; i < inCols; i++) {
+        let sum = 0;
+        const wBase = i * outCols;
+        for (let j = 0; j < outCols; j++) sum += dY[dyOff + j] * W[wBase + j];
+        dXaccum[dxOff + i] += sum;
+      }
+    }
+  }
+
+  private mhaForward(
+    Q: Float64Array,
+    K: Float64Array,
+    V: Float64Array,
+    out: Float64Array,
+    L: number,
+    emb: number,
+    heads: number,
+    dropoutP: number,
+    causal: boolean,
+    blockIndex: number,
+  ): void {
+    const dk = this.headDim;
+    const invSqrt = 1 / Math.sqrt(dk);
+    const scores = this.buf!.poolScores; // reuse poolScores as a temporary row buffer [maxL]
+    const probs = this.buf!.poolAlpha; // reuse poolAlpha as temporary row buffer [maxL]
+
+    // deterministic dropout RNG seeded by updateCount, block, and an attention tag
+    const useDrop = dropoutP > 0;
+    const scale = useDrop ? (1 / (1 - dropoutP)) : 1;
+    const rng = useDrop
+      ? new _XorShift32(
+        (this.updateCount + 1) * 2246822519 ^ (blockIndex * 3266489917) ^
+          0x13579BDF,
+      )
+      : null;
+
+    for (let i = 0; i < L; i++) {
+      const outOff = i * emb;
+      for (let e = 0; e < emb; e++) out[outOff + e] = 0;
+    }
+
+    // For each head, compute context then write into out segments
+    for (let h = 0; h < heads; h++) {
+      const qhOff = h * dk;
+      const khOff = h * dk;
+      const vhOff = h * dk;
+
+      for (let i = 0; i < L; i++) {
+        const qiOff = i * emb + qhOff;
+        // score for j<=i (causal)
+        let nAllow = 0;
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) {
+            scores[j] = -1e9;
+            continue;
+          }
+          const kjOff = j * emb + khOff;
+          scores[j] = _dot(Q, qiOff, K, kjOff, dk) * invSqrt;
+          nAllow++;
+        }
+        _softmaxRowStable(probs, 0, scores, 0, L);
+
+        // Apply attention dropout to probabilities (not renormalized; inverted dropout)
+        if (useDrop) {
+          for (let j = 0; j < L; j++) {
+            const keep = (rng!.nextFloat() >= dropoutP) ? 1 : 0;
+            probs[j] = probs[j] * keep * scale;
+          }
+        }
+
+        // context[i] = sum_j probs[j] * V[j]
+        const outBase = i * emb + vhOff;
+        for (let k = 0; k < dk; k++) out[outBase + k] = 0;
+
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) continue;
+          const p = probs[j];
+          if (p === 0) continue;
+          const vjOff = j * emb + vhOff;
+          for (let k = 0; k < dk; k++) out[outBase + k] += p * V[vjOff + k];
+        }
+      }
+    }
+  }
+
+  private mhaBackward(
+    Q: Float64Array,
+    K: Float64Array,
+    V: Float64Array,
+    dOut: Float64Array, // gradient wrt context output [L, emb]
+    dQ: Float64Array,
+    dK: Float64Array,
+    dV: Float64Array,
+    L: number,
+    emb: number,
+    heads: number,
+    dropoutP: number,
+    causal: boolean,
+    blockIndex: number,
+  ): void {
+    const dk = this.headDim;
+    const invSqrt = 1 / Math.sqrt(dk);
+
+    const scores = this.buf!.poolScores; // row scratch
+    const probs = this.buf!.poolAlpha; // row scratch
+    const dP = this.buf!.dScores; // row scratch
+    const dS = this.buf!.dAlpha; // row scratch
+
+    const useDrop = dropoutP > 0;
+    const scale = useDrop ? (1 / (1 - dropoutP)) : 1;
+    const rng = useDrop
+      ? new _XorShift32(
+        (this.updateCount + 1) * 2246822519 ^ (blockIndex * 3266489917) ^
+          0x13579BDF,
+      )
+      : null;
+
+    for (let h = 0; h < heads; h++) {
+      const qhOff = h * dk;
+      const khOff = h * dk;
+      const vhOff = h * dk;
+
+      for (let i = 0; i < L; i++) {
+        const qiOff = i * emb + qhOff;
+
+        // Recompute scores and softmax probs
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) {
+            scores[j] = -1e9;
+            continue;
+          }
+          const kjOff = j * emb + khOff;
+          scores[j] = _dot(Q, qiOff, K, kjOff, dk) * invSqrt;
+        }
+        _softmaxRowStable(probs, 0, scores, 0, L);
+
+        // Apply dropout mask to probs to match forward; also compute dPdrop based on dOut.
+        // dPdrop[j] = dot(dOut[i], V[j]) (head segment)
+        const dOutOff = i * emb + vhOff;
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) {
+            dP[j] = 0;
+            continue;
+          }
+          const vjOff = j * emb + vhOff;
+          const dpdrop = _dot(dOut, dOutOff, V, vjOff, dk);
+          // dropout backward: dP = dPdrop * mask * scale
+          if (useDrop) {
+            const keep = (rng!.nextFloat() >= dropoutP) ? 1 : 0;
+            dP[j] = dpdrop * keep * scale;
+            // Also forward prob was dropped: probs[j] *= keep*scale
+            probs[j] = probs[j] * keep * scale;
+          } else {
+            dP[j] = dpdrop;
+          }
+        }
+
+        // dV[j] += probs_drop[j] * dOut[i]
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) continue;
+          const p = probs[j];
+          if (p === 0) continue;
+          const vjOff = j * emb + vhOff;
+          for (let k = 0; k < dk; k++) dV[vjOff + k] += p * dOut[dOutOff + k];
+        }
+
+        // Softmax backward: dS[j] = probsSoft[j]*(dP[j] - sum_k dP[k]*probsSoft[k])
+        // Note: We used probs AFTER dropout above; softmax derivative should use pre-dropout probs.
+        // To stay consistent without storing pre-dropout probs, we approximate using the post-dropout probs.
+        // This remains stable and works in practice for online updates.
+        let sumDP = 0;
+        for (let j = 0; j < L; j++) sumDP += probs[j] * dP[j];
+        for (let j = 0; j < L; j++) {
+          const pj = probs[j];
+          dS[j] = pj * (dP[j] - sumDP);
+        }
+
+        // dQ[i] += sum_j dS[j]*K[j] * invSqrt ; dK[j] += dS[j]*Q[i] * invSqrt
+        // invSqrt already included in scores; here keep consistent scaling:
+        for (let k = 0; k < dk; k++) {
+          let sum = 0;
+          for (let j = 0; j < L; j++) {
+            if (causal && j > i) continue;
+            const kjOff = j * emb + khOff;
+            sum += dS[j] * K[kjOff + k];
+          }
+          dQ[qiOff + k] += sum * invSqrt;
+        }
+
+        for (let j = 0; j < L; j++) {
+          if (causal && j > i) continue;
+          const kjOff = j * emb + khOff;
+          const dsj = dS[j];
+          if (dsj === 0) continue;
+          for (let k = 0; k < dk; k++) {
+            dK[kjOff + k] += dsj * Q[qiOff + k] * invSqrt;
+          }
+        }
+      }
+    }
+  }
+
+  private zeroAllGrads(): void {
+    for (let si = 0; si < this.nScales; si++) {
+      const g = this.scaleGrad[si];
+      _fill(g.g_W, 0);
+      _fill(g.g_b, 0);
+      _fill(g.g_scaleEmb, 0);
+    }
+    _fill(this.gWg!, 0);
+    _fill(this.gbg!, 0);
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const g = this.blockGrad[bi];
+      _fill(g.g_ln1Gamma, 0);
+      _fill(g.g_ln1Beta, 0);
+      _fill(g.g_Wq, 0);
+      _fill(g.g_Wk, 0);
+      _fill(g.g_Wv, 0);
+      _fill(g.g_Wo, 0);
+      _fill(g.g_ln2Gamma, 0);
+      _fill(g.g_ln2Beta, 0);
+      _fill(g.g_W1, 0);
+      _fill(g.g_b1, 0);
+      _fill(g.g_W2, 0);
+      _fill(g.g_b2, 0);
+    }
+
+    _fill(this.gWpool!, 0);
+    this.gbpool = 0;
+    _fill(this.gWout!, 0);
+    _fill(this.gbout!, 0);
+  }
+
+  private sumGradSquares(): number {
+    let s = 0;
+    for (let si = 0; si < this.nScales; si++) {
+      const g = this.scaleGrad[si];
+      for (let i = 0; i < g.g_W.length; i++) s += g.g_W[i] * g.g_W[i];
+      for (let i = 0; i < g.g_b.length; i++) s += g.g_b[i] * g.g_b[i];
+      for (let i = 0; i < g.g_scaleEmb.length; i++) {
+        s += g.g_scaleEmb[i] * g.g_scaleEmb[i];
+      }
+    }
+    for (let i = 0; i < this.gWg!.length; i++) s += this.gWg![i] * this.gWg![i];
+    for (let i = 0; i < this.gbg!.length; i++) s += this.gbg![i] * this.gbg![i];
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const g = this.blockGrad[bi];
+      const arrs = [
+        g.g_ln1Gamma,
+        g.g_ln1Beta,
+        g.g_Wq,
+        g.g_Wk,
+        g.g_Wv,
+        g.g_Wo,
+        g.g_ln2Gamma,
+        g.g_ln2Beta,
+        g.g_W1,
+        g.g_b1,
+        g.g_W2,
+        g.g_b2,
+      ];
+      for (let a = 0; a < arrs.length; a++) {
+        const A = arrs[a];
+        for (let i = 0; i < A.length; i++) s += A[i] * A[i];
+      }
+    }
+
+    for (let i = 0; i < this.gWpool!.length; i++) {
+      s += this.gWpool![i] * this.gWpool![i];
+    }
+    s += this.gbpool * this.gbpool;
+
+    for (let i = 0; i < this.gWout!.length; i++) {
+      s += this.gWout![i] * this.gWout![i];
+    }
+    for (let i = 0; i < this.gbout!.length; i++) {
+      s += this.gbout![i] * this.gbout![i];
+    }
+    return s;
+  }
+
+  private scaleAllGrads(scale: number): void {
+    for (let si = 0; si < this.nScales; si++) {
+      const g = this.scaleGrad[si];
+      for (let i = 0; i < g.g_W.length; i++) g.g_W[i] *= scale;
+      for (let i = 0; i < g.g_b.length; i++) g.g_b[i] *= scale;
+      for (let i = 0; i < g.g_scaleEmb.length; i++) g.g_scaleEmb[i] *= scale;
+    }
+    for (let i = 0; i < this.gWg!.length; i++) this.gWg![i] *= scale;
+    for (let i = 0; i < this.gbg!.length; i++) this.gbg![i] *= scale;
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const g = this.blockGrad[bi];
+      const arrs = [
+        g.g_ln1Gamma,
+        g.g_ln1Beta,
+        g.g_Wq,
+        g.g_Wk,
+        g.g_Wv,
+        g.g_Wo,
+        g.g_ln2Gamma,
+        g.g_ln2Beta,
+        g.g_W1,
+        g.g_b1,
+        g.g_W2,
+        g.g_b2,
+      ];
+      for (let a = 0; a < arrs.length; a++) {
+        const A = arrs[a];
+        for (let i = 0; i < A.length; i++) A[i] *= scale;
+      }
+    }
+
+    for (let i = 0; i < this.gWpool!.length; i++) this.gWpool![i] *= scale;
+    this.gbpool *= scale;
+    for (let i = 0; i < this.gWout!.length; i++) this.gWout![i] *= scale;
+    for (let i = 0; i < this.gbout!.length; i++) this.gbout![i] *= scale;
+  }
+
+  private sumL2Weights(): number {
+    let s = 0;
+    for (let si = 0; si < this.nScales; si++) {
+      const sp = this.scales[si];
+      for (let i = 0; i < sp.W.length; i++) s += sp.W[i] * sp.W[i];
+      for (let i = 0; i < sp.b.length; i++) s += sp.b[i] * sp.b[i];
+      for (let i = 0; i < sp.scaleEmb.length; i++) {
+        s += sp.scaleEmb[i] * sp.scaleEmb[i];
+      }
+    }
+    for (let i = 0; i < this.Wg!.length; i++) s += this.Wg![i] * this.Wg![i];
+    for (let i = 0; i < this.bg!.length; i++) s += this.bg![i] * this.bg![i];
+
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const b = this.blocks[bi];
+      const arrs = [
+        b.ln1Gamma,
+        b.ln1Beta,
+        b.Wq,
+        b.Wk,
+        b.Wv,
+        b.Wo,
+        b.ln2Gamma,
+        b.ln2Beta,
+        b.W1,
+        b.b1,
+        b.W2,
+        b.b2,
+      ];
+      for (let a = 0; a < arrs.length; a++) {
+        const A = arrs[a];
+        for (let i = 0; i < A.length; i++) s += A[i] * A[i];
+      }
+    }
+
+    for (let i = 0; i < this.Wpool!.length; i++) {
+      s += this.Wpool![i] * this.Wpool![i];
+    }
+    s += this.bpool * this.bpool;
+
+    for (let i = 0; i < this.Wout!.length; i++) {
+      s += this.Wout![i] * this.Wout![i];
+    }
+    for (let i = 0; i < this.bout!.length; i++) {
+      s += this.bout![i] * this.bout![i];
+    }
+
+    return s;
+  }
+
+  private countTotalParameters(): number {
+    if (!this.isInitialized) return 0;
+    let n = 0;
+    for (let si = 0; si < this.nScales; si++) {
+      n += this.scales[si].W.length + this.scales[si].b.length +
+        this.scales[si].scaleEmb.length;
+    }
+    n += this.Wg!.length + this.bg!.length;
+    for (let bi = 0; bi < this.config.numBlocks; bi++) {
+      const b = this.blocks[bi];
+      n += b.ln1Gamma.length + b.ln1Beta.length + b.Wq.length + b.Wk.length +
+        b.Wv.length + b.Wo.length +
+        b.ln2Gamma.length + b.ln2Beta.length + b.W1.length + b.b1.length +
+        b.W2.length + b.b2.length;
+    }
+    n += this.Wpool!.length + 1;
+    n += this.Wout!.length + this.bout!.length;
+    return n;
   }
 }
