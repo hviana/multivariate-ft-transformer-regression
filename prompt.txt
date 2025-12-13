@@ -13,6 +13,7 @@ PERFORMANCE:
 - Implement lazy initialization where appropriate
 - Use iterative methods to prevent memory overallocation
 - Write code that is highly CPU-optimized as well
+- Provide fully-expanded backward through all layers
 
 DESIGN:
 - Full numerical stability; OOP with interfaces for public contracts
