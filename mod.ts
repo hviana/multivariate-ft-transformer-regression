@@ -103,6 +103,7 @@ export interface WeightInfo {
 }
 
 export interface FusionTemporalTransformerRegressionConfig {
+  gradientClipNorm: number; // 0 disables
   numBlocks: number;
   embeddingDim: number;
   numHeads: number;
@@ -155,6 +156,7 @@ export interface IFusionTemporalTransformerRegression {
 // ============================================================================
 
 export const DEFAULT_FTTR_CONFIG: FusionTemporalTransformerRegressionConfig = {
+  gradientClipNorm: 5.0,
   numBlocks: 3,
   embeddingDim: 64,
   numHeads: 8,
@@ -804,19 +806,39 @@ class AdamParamStore {
    *
    * Returns gradient L2 norm.
    */
-  step(lr: number, beta1: number, beta2: number, eps: number): number {
+  step(
+    lr: number,
+    beta1: number,
+    beta2: number,
+    eps: number,
+    clipNorm = 0.0,
+  ): number {
     this._t++;
     const t = this._t;
 
-    // Bias correction factors
+    // Pass 1: raw grad norm
+    let norm2 = 0.0;
+    const s = this._slots;
+    for (let si = 0; si < s.length; si++) {
+      const g = s[si].g;
+      for (let i = 0; i < g.length; i++) {
+        const gi = g[i];
+        norm2 += gi * gi;
+      }
+    }
+    const norm = Math.sqrt(norm2);
+
+    // Clip scale
+    let scale = 1.0;
+    if (clipNorm > 0.0 && norm > clipNorm) scale = clipNorm / (norm + 1e-18);
+
+    // Bias correction
     const b1t = Math.pow(beta1, t);
     const b2t = Math.pow(beta2, t);
     const inv1 = 1.0 / (1.0 - b1t + 1e-18);
     const inv2 = 1.0 / (1.0 - b2t + 1e-18);
 
-    let norm2 = 0.0;
-    const s = this._slots;
-
+    // Pass 2: update
     for (let si = 0; si < s.length; si++) {
       const w = s[si].w;
       const g = s[si].g;
@@ -824,8 +846,7 @@ class AdamParamStore {
       const v = s[si].v;
 
       for (let i = 0; i < w.length; i++) {
-        const gi = g[i];
-        norm2 += gi * gi;
+        const gi = g[i] * scale;
 
         const mi = beta1 * m[i] + (1.0 - beta1) * gi;
         const vi = beta2 * v[i] + (1.0 - beta2) * (gi * gi);
@@ -840,7 +861,7 @@ class AdamParamStore {
       }
     }
 
-    return Math.sqrt(norm2);
+    return norm; // raw (pre-clip) norm
   }
 
   toJSON(): unknown {
@@ -915,8 +936,14 @@ export class FusionTemporalTransformerRegression
   implements IFusionTemporalTransformerRegression {
   private readonly _cfg: FusionTemporalTransformerRegressionConfig;
 
+  private _gQ: Float64Array[] = [];
+  private _gK: Float64Array[] = [];
+  private _gV: Float64Array[] = [];
+  private _gContext: Float64Array[] = [];
+
   // Dimensions inferred at first fit
   private _isInitialized = false;
+  private _scratchFFN!: Float64Array; // [maxL * Hhid]
   private _inDim = 0;
   private _outDim = 0;
 
@@ -1264,6 +1291,7 @@ export class FusionTemporalTransformerRegression
       this._cfg.beta1,
       this._cfg.beta2,
       this._cfg.epsilon,
+      this._cfg.gradientClipNorm,
     );
 
     // Running loss & accuracy
@@ -1712,6 +1740,9 @@ export class FusionTemporalTransformerRegression
     skipParamInit = false,
   ): void {
     this._isInitialized = true;
+    this._scratchFFN = new Float64Array(
+      (this._cfg.maxSequenceLength | 0) * Hhid,
+    );
     this._inDim = inDim | 0;
     this._outDim = outDim | 0;
 
@@ -1881,6 +1912,10 @@ export class FusionTemporalTransformerRegression
     const attMatSize = headCount * maxL * maxL;
 
     for (let b = 0; b < numBlocks; b++) {
+      this._gQ[b] = new Float64Array(maxL * D);
+      this._gK[b] = new Float64Array(maxL * D);
+      this._gV[b] = new Float64Array(maxL * D);
+      this._gContext[b] = new Float64Array(maxL * D);
       this._ln1Gamma[b] = new Float64Array(D);
       this._ln1Beta[b] = new Float64Array(D);
       this._ln2Gamma[b] = new Float64Array(D);
@@ -2401,18 +2436,27 @@ export class FusionTemporalTransformerRegression
 
       this._selfAttentionBackward(
         this._ln1Out[b],
+        this._context[b],
         L,
         D,
         this._attWq[b],
+        this._attBq[b],
         this._attWk[b],
+        this._attBk[b],
         this._attWv[b],
+        this._attBv[b],
         this._attWo[b],
+        this._attBo[b],
         this._q[b],
         this._k[b],
         this._v[b],
         this._attProbs[b],
         dAttOut,
         dLn1Out,
+        this._gContext[b],
+        this._gQ[b],
+        this._gK[b],
+        this._gV[b],
         this._gAttWq[b],
         this._gAttBq[b],
         this._gAttWk[b],
@@ -3012,19 +3056,28 @@ export class FusionTemporalTransformerRegression
    * Produces dX and grads on Wq/Wk/Wv/Wo and biases.
    */
   private _selfAttentionBackward(
-    X: Float64Array,
+    X: Float64Array, // [L,D]  (LN1 output)
+    context: Float64Array, // [L,D]
     L: number,
     D: number,
     Wq: Float64Array,
+    bq: Float64Array,
     Wk: Float64Array,
+    bk: Float64Array,
     Wv: Float64Array,
+    bv: Float64Array,
     Wo: Float64Array,
-    Q: Float64Array,
-    K: Float64Array,
-    V: Float64Array,
-    probs: Float64Array,
-    dOut: Float64Array,
-    dX: Float64Array,
+    bo: Float64Array,
+    Q: Float64Array, // [L,D] cached forward
+    K: Float64Array, // [L,D]
+    V: Float64Array, // [L,D]
+    probs: Float64Array, // [H,L,L]
+    dOut: Float64Array, // [L,D]
+    dX: Float64Array, // [L,D] accumulate
+    dContext: Float64Array, // [L,D] scratch
+    dQ: Float64Array, // [L,D] scratch
+    dK: Float64Array, // [L,D] scratch
+    dV: Float64Array, // [L,D] scratch
     dWq: Float64Array,
     dbq: Float64Array,
     dWk: Float64Array,
@@ -3037,45 +3090,24 @@ export class FusionTemporalTransformerRegression
     const Hh = this._cfg.numHeads | 0;
     const dk = (D / Hh) | 0;
     const invSqrt = 1.0 / Math.sqrt(dk);
+
     const useCausal = !!this._cfg.causalMask;
     const win = this._cfg.slidingWindow | 0;
 
-    // Back through output projection: out = context*Wo + bo
-    // Need dContext and grads for Wo/bo
-    const dContext = this._context[0]; // reuse block0 context buffer as scratch (allocated maxL*D)
+    // zero scratch
     dContext.fill(0, 0, L * D);
+    dQ.fill(0, 0, L * D);
+    dK.fill(0, 0, L * D);
+    dV.fill(0, 0, L * D);
 
-    this._linearMatBackward(
-      this._contextFromCurrentBlock(), // context from current block is stored in this._context[b]; but we don't know b here
-      L,
-      D,
-      Wo,
-      D,
-      dOut,
-      dContext,
-      dWo,
-      dbo,
-    );
-
-    // Since we called with only tensors, we need the correct context buffer.
-    // We can't access it directly without passing; so we provide a getter that points to a temp view:
-    // (Implemented below) - however, for correctness we instead compute dContext directly from Wo and dOut:
-    // dContext[i,k] = sum_j dOut[i,j] * Wo[k,j]
-    // And dWo[k,j] += context[i,k] * dOut[i,j]
-    // dbo[j] += sum_i dOut[i,j]
-    //
-    // We already did a call above using _linearMatBackward but it uses a placeholder context.
-    // For correctness: redo explicitly with the right context is required.
-    // We'll implement explicit here, using the "context" pointer embedded in _contextFromCurrentBlock().
-    const context = this._contextFromCurrentBlock();
-    dContext.fill(0, 0, L * D);
-
+    // ---- Backprop output projection: out = context*Wo + bo
     // dbo
     for (let j = 0; j < D; j++) {
       let sum = 0.0;
       for (let i = 0; i < L; i++) sum += dOut[i * D + j];
       dbo[j] += sum;
     }
+
     // dWo and dContext
     for (let i = 0; i < L; i++) {
       const cOff = i * D;
@@ -3083,37 +3115,23 @@ export class FusionTemporalTransformerRegression
       for (let j = 0; j < D; j++) {
         const dy = dOut[dOff + j];
         // dWo[:,j] += context[i,:] * dy
-        for (let k = 0; k < D; k++) dWo[k * D + j] += context[cOff + k] * dy;
+        for (let k2 = 0; k2 < D; k2++) {
+          dWo[k2 * D + j] += context[cOff + k2] * dy;
+        }
         // dContext[i,k] += Wo[k,j] * dy
-        for (let k = 0; k < D; k++) dContext[cOff + k] += Wo[k * D + j] * dy;
+        for (let k2 = 0; k2 < D; k2++) {
+          dContext[cOff + k2] += Wo[k2 * D + j] * dy;
+        }
       }
     }
 
-    // Now back through attention softmax and Q/K/V projections.
-    // We need dQ,dK,dV
-    const dQ = this._qFromCurrentBlock(); // reuse Q buffer as dQ
-    const dK = this._kFromCurrentBlock(); // reuse K buffer as dK
-    const dV = this._vFromCurrentBlock(); // reuse V buffer as dV
-    dQ.fill(0, 0, L * D);
-    dK.fill(0, 0, L * D);
-    dV.fill(0, 0, L * D);
-
-    // We'll compute per head:
-    // contextHead[i] = sum_j p[i,j] * V[j]
-    // dV[j] += sum_i p[i,j] * dContext[i]
-    // dP[i,j] = dot(dContext[i], V[j])
-    // dScores = softmaxBackward(dP)
-    // dQ[i] += sum_j dScores[i,j] * K[j] * invSqrt
-    // dK[j] += sum_i dScores[i,j] * Q[i] * invSqrt
-    const dPRow = this._tmpRow; // length maxL
-    const dScoresRow = this._tmpRow; // reuse in-place
-
+    // ---- Backprop attention (per head)
+    const row = this._tmpRow; // length maxL
     for (let h = 0; h < Hh; h++) {
+      const headBase = h * L * L;
       const qOffH = h * dk;
       const kOffH = h * dk;
       const vOffH = h * dk;
-
-      const headBase = h * L * L;
 
       for (let i = 0; i < L; i++) {
         let maxJ = L - 1;
@@ -3124,36 +3142,28 @@ export class FusionTemporalTransformerRegression
           if (lo > minJ) minJ = lo;
         }
 
-        // Build dP row: dP[j] = dot(dContext[i,h], V[j,h])
-        const dCiOff = i * D + qOffH;
-        for (let j = 0; j < L; j++) dPRow[j] = 0.0;
+        // dpRow[j] = dot(dContext[i,h], V[j,h]) else 0
+        for (let j = 0; j < L; j++) row[j] = 0.0;
 
+        const dCiOff = i * D + qOffH;
         for (let j = minJ; j <= maxJ; j++) {
           const vjOff = j * D + vOffH;
           let dot = 0.0;
           for (let t = 0; t < dk; t++) {
             dot += dContext[dCiOff + t] * V[vjOff + t];
           }
-          dPRow[j] = dot;
+          row[j] = dot;
         }
 
-        // dScores row via softmax backward
+        // dScores = softmaxBackward(dpRow, probsRow) stored back into `row`
         const pRowOff = headBase + i * L;
-        // Write dScoresRow into tmpRow (same array)
-        // Need dp buffer; we already have dp in dPRow.
-        // softmaxBackwardRow expects dp array; use p=probs, dp=dPRow, output=dScoresRow
-        // We'll use dScoresRow as output
-        // (We keep dScoresRow length L)
-        // Copy dPRow into tmpRow? Already in tmpRow; but we also need output.
-        // Use another view by writing output into dScoresRow in-place:
-        // We'll allocate nothing: compute dot then each.
         let dotp = 0.0;
-        for (let j = 0; j < L; j++) dotp += dPRow[j] * probs[pRowOff + j];
+        for (let j = 0; j < L; j++) dotp += row[j] * probs[pRowOff + j];
         for (let j = 0; j < L; j++) {
-          dScoresRow[j] = probs[pRowOff + j] * (dPRow[j] - dotp);
+          row[j] = probs[pRowOff + j] * (row[j] - dotp);
         }
 
-        // dV accumulation: dV[j] += p[i,j] * dContext[i]
+        // dV[j] += p[i,j] * dContext[i]
         for (let j = minJ; j <= maxJ; j++) {
           const pij = probs[pRowOff + j];
           const vjOff = j * D + vOffH;
@@ -3162,12 +3172,11 @@ export class FusionTemporalTransformerRegression
           }
         }
 
-        // dQ and dK accumulation:
         // dQ[i] += sum_j dScores[i,j] * K[j] * invSqrt
         // dK[j] += dScores[i,j] * Q[i] * invSqrt
         const qiOff = i * D + qOffH;
         for (let j = minJ; j <= maxJ; j++) {
-          const ds = dScoresRow[j] * invSqrt;
+          const ds = row[j] * invSqrt;
           const kjOff = j * D + kOffH;
           for (let t = 0; t < dk; t++) {
             dQ[qiOff + t] += ds * K[kjOff + t];
@@ -3177,9 +3186,7 @@ export class FusionTemporalTransformerRegression
       }
     }
 
-    // Back through linear projections:
-    // Q = X*Wq + bq; etc.
-    // dWq += X^T * dQ; dbq += sum dQ; dX += dQ * Wq^T
+    // ---- Backprop Q/K/V projections
     this._linearMatBackward(X, L, D, Wq, D, dQ, dX, dWq, dbq);
     this._linearMatBackward(X, L, D, Wk, D, dK, dX, dWk, dbk);
     this._linearMatBackward(X, L, D, Wv, D, dV, dX, dWv, dbv);
@@ -3257,7 +3264,7 @@ export class FusionTemporalTransformerRegression
 
     // Back through out = A1*W2 + b2
     // dA1 = dOut * W2^T
-    const dA1 = this._ffA1[0]; // reuse block0 A1 buffer as scratch [maxL,H]
+    const dA1 = this._scratchFFN;
     dA1.fill(0, 0, L * Hhid);
 
     // db2
