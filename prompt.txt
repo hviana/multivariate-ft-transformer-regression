@@ -41,43 +41,193 @@ ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embedd
 ALGORITHMS:
 
 Fusion Temporal Transformer Architecture:
-1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length, seqLen = xCoordinates.length
-2. Temporal Positional Encoding: PE(pos,2i) = sin(pos/10000^(2i/d)), PE(pos,2i+1) = cos(pos/10000^(2i/d))
-3. Multi-Scale Temporal Convolution: For each scale s ∈ temporalScales: Fₛ = GELU(Conv1D(X, kernel=temporalKernelSize, stride=s)) ∈ ℝ^(seqLen/s × embeddingDim)
-4. Scale-Specific Embedding: Eₛ = Fₛ + PEₛ + ScaleEmb(s), learnable scale embedding per temporal resolution
-5. Cross-Scale Fusion: Fuse representations across scales via gated attention fusion: G = σ(Concat(E₁,...,Eₛ)Wg), Fused = Σ(Gₛ ⊙ Eₛ)
-6. Transformer Block × numBlocks: LayerNorm → Temporal Multi-Head Self-Attention → Residual → LayerNorm → FFN → Residual
-7. Temporal Aggregation: Pool across sequence dimension via attention-weighted mean: α = softmax(HWpool), out = Σαᵢhᵢ
-8. Output: Dense(out) → ŷ ∈ ℝ^outputDim
+
+inputDim = xCoordinates[0].length
+outputDim = yCoordinates[0].length
+seqLen = xCoordinates.length
+
+for pos from 0 to seqLen:
+  for i from 0 to embeddingDim/2:
+    angle = pos / power(10000, 2*i / embeddingDim)
+    positionalEncoding[pos][2*i] = sin(angle)
+    positionalEncoding[pos][2*i + 1] = cos(angle)
+
+for each scale s in temporalScales:
+  convOutput = conv1d(X, temporalKernelSize, stride=s)
+  F_s = gelu(convOutput)  // shape: (seqLen/s, embeddingDim)
+  E_s = F_s + positionalEncoding_s + scaleEmbedding[s]
+
+fusedInput = concatenate(E_1, E_2, ..., E_s) along feature dim
+gates = sigmoid(fusedInput * W_gate)
+fused = sum over scales(gates[s] * E_s)
+
+for block from 0 to numBlocks:
+  normalized = layerNorm(fused)
+  attention = temporalMultiHeadAttention(normalized)
+  fused = fused + attention
+  normalized = layerNorm(fused)
+  ffnOut = feedForward(normalized)
+  fused = fused + ffnOut
+
+poolWeights = softmax(fused * W_pool)
+aggregated = sum(poolWeights[i] * fused[i] for i in seqLen)
+output = dense(aggregated)  // shape: outputDim
+
 
 Temporal Multi-Head Self-Attention:
-1. Project: Qₕ = XWᵠₕ, Kₕ = XWᵏₕ, Vₕ = XWᵛₕ, dₖ = embeddingDim/numHeads
-2. Temporal Mask: Apply causal or sliding window mask for temporal locality
-3. Scores: Aₕ = softmax(QₕKₕᵀ / √dₖ + TemporalBias)Vₕ
-4. Output: MultiHead = Concat(A₁,...,Aₕ)Wᵒ + b
+
+headDim = embeddingDim / numHeads
+
+for h from 0 to numHeads:
+  Q[h] = X * W_query[h]
+  K[h] = X * W_key[h]
+  V[h] = X * W_value[h]
+  
+  scores = (Q[h] * transpose(K[h])) / sqrt(headDim)
+  scores = scores + temporalBias
+  if useCausalMask:
+    for i from 0 to seqLen:
+      for j from i+1 to seqLen:
+        scores[i][j] = -infinity
+  attention[h] = softmax(scores) * V[h]
+
+multiHead = concatenate(attention[0], ..., attention[numHeads-1])
+output = multiHead * W_output + bias
+
 
 Cross-Scale Attention Fusion:
-1. Query from finest scale: Q = E₁Wᵠ
-2. Keys/Values from all scales: K = Concat(E₁,...,Eₛ)Wᵏ, V = Concat(E₁,...,Eₛ)Wᵛ
-3. Fused = softmax(QKᵀ/√d)V, captures cross-temporal dependencies
+
+Q = E_finest * W_query
+allScales = concatenate(E_1, E_2, ..., E_s) along sequence dim
+K = allScales * W_key
+V = allScales * W_value
+
+scores = (Q * transpose(K)) / sqrt(embeddingDim)
+weights = softmax(scores)
+fused = weights * V
+
 
 Feed-Forward Network:
-FFN(x) = GELU(xW₁ + b₁)W₂ + b₂, hidden_dim = embeddingDim × ffnMultiplier
 
-Adam + Cosine Warmup:
-1. Normalize: x̃ = (x - μ)/(σ + ε)
-2. Forward: propagate through temporal conv, fusion, transformer blocks, cache activations for backprop
-3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
-4. Backprop: ∂L/∂W via chain rule through attention, fusion, and temporal conv layers
-5. LR: warmup → cosine decay
-6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
+hiddenDim = embeddingDim * ffnMultiplier
+hidden = X * W1 + b1
+activated = gelu(hidden)
+output = activated * W2 + b2
 
-Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ), σ² = M₂/(n-1) → inputs (normalize)
 
-Accuracy: track running average loss L̄ = ΣLoss/n; accuracy = 1/(1 + L̄)
+GELU Activation:
 
-ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(δ); shrink window; reset stats on drift
+gelu(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 
-Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
+
+Layer Normalization:
+
+mean = sum(x) / length
+variance = sum((x[i] - mean)^2) / length
+normalized = (x - mean) / sqrt(variance + epsilon)
+output = gamma * normalized + beta
+
+
+Adam Optimizer with Cosine Warmup:
+
+normalize inputs:
+  xNorm = (x - inputMean) / (inputStd + epsilon)
+
+forward pass:
+  cache all activations for backprop
+  predicted = forwardThroughNetwork(xNorm)
+
+compute loss:
+  mseLoss = sum((y - predicted)^2) / (2 * n)
+  l2Reg = (regularizationStrength / 2) * sum(W^2 for all weights)
+  totalLoss = mseLoss + l2Reg
+
+backward pass:
+  compute gradients via chain rule through:
+    output layer -> attention pooling -> transformer blocks -> fusion -> temporal conv
+
+learning rate schedule:
+  if step < warmupSteps:
+    lr = learningRate * (step / warmupSteps)
+  else:
+    progress = (step - warmupSteps) / (totalSteps - warmupSteps)
+    lr = learningRate * 0.5 * (1 + cos(pi * progress))
+
+adam update for each weight W:
+  m = beta1 * m + (1 - beta1) * gradient
+  v = beta2 * v + (1 - beta2) * gradient^2
+  mCorrected = m / (1 - beta1^step)
+  vCorrected = v / (1 - beta2^step)
+  W = W - lr * mCorrected / (sqrt(vCorrected) + epsilon)
+
+
+Welford Online Normalization:
+
+on new sample x:
+  count = count + 1
+  delta = x - mean
+  mean = mean + delta / count
+  delta2 = x - mean
+  m2 = m2 + delta * delta2
+  if count > 1:
+    variance = m2 / (count - 1)
+    std = sqrt(variance)
+
+
+Running Accuracy:
+
+totalLoss = totalLoss + currentLoss
+sampleCount = sampleCount + 1
+averageLoss = totalLoss / sampleCount
+accuracy = 1 / (1 + averageLoss)
+
+
+ADWIN Drift Detection:
+
+add error to window
+while window can be split:
+  for each split point:
+    leftMean = mean of left subwindow
+    rightMean = mean of right subwindow
+    n0 = left size, n1 = right size
+    n = n0 + n1
+    harmonicMean = (1/n0 + 1/n1)
+    epsilonCut = sqrt(harmonicMean * ln(4/delta) / 2)
+    if abs(leftMean - rightMean) >= epsilonCut:
+      driftDetected = true
+      remove older portion of window
+      trigger stats reset
+      break
+
+
+Outlier Detection and Downweighting:
+
+residual = (y - predicted) / outputStd
+residualNorm = sqrt(sum(residual^2))
+if residualNorm > outlierThreshold:
+  isOutlier = true
+  sampleWeight = 0.1
+else:
+  isOutlier = false
+  sampleWeight = 1.0
+weightedLoss = loss * sampleWeight
+
+
+Prediction with Uncertainty:
+
+predicted = forward(normalizedInput)
+denormalized = predicted * outputStd + outputMean
+
+standardError = outputStd / sqrt(sampleCount)
+confidenceMultiplier = 1.96  // 95% confidence
+lowerBound = denormalized - confidenceMultiplier * standardError
+upperBound = denormalized + confidenceMultiplier * standardError
+
+
+Convergence Check:
+
+if abs(previousLoss - currentLoss) < convergenceThreshold:
+  converged = true
+
 
 Export: FusionTemporalTransformerRegression
