@@ -1,251 +1,84 @@
-Write a single self-contained TypeScript module that exports class FusionTemporalTransformerRegression implementing a Fusion Temporal Transformer for multivariate regression with incremental online learning (online Adam), online z-score normalization (Welford), L2 regularization, outlier downweighting, and ADWIN drift detection.
+Implement TypeScript library "FusionTemporalTransformerRegression": Fusion Temporal Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
 
-OUTPUT RULES
-Return ONLY the TypeScript code.
-No external dependencies. No Node/Deno-specific APIs (pure TS).
+PERFORMANCE:
+- Minimize memory allocations by reusing arrays and objects wherever possible
+- Use typed arrays (Float64Array) for all numerical computations
+- Avoid creating intermediate arrays in hot paths
+- Implement in-place matrix operations
+- Use object pooling for frequently created objects
+- Minimize garbage collection pressure
+- Cache computed values that are reused
+- Use efficient loop structures (avoid forEach, map, reduce in critical paths)
+- Preallocate buffers for attention scores and layer activations
+- Implement lazy initialization where appropriate
+- Use iterative methods to prevent memory overallocation
+- Write code that is highly CPU-optimized as well
 
-HARD PERFORMANCE CONSTRAINTS
-Use Float64Array for all numerical tensors and parameters.
-Avoid allocations in hot paths: reuse preallocated buffers, caches, and scratch space.
-Avoid creating intermediate arrays in forward/backward; use in-place ops where safe.
-Use for-loops only in compute-heavy sections (no forEach/map/reduce).
-Store matrices as contiguous 1D Float64Array in row-major with explicit shape/stride helpers.
-Preallocate attention score buffers, Q/K/V buffers, FFN buffers, conv outputs per scale, fusion buffers, gradients, and optimizer moments.
-Lazy-initialize buffers on first call when input/output dimensions become known.
-No recursion; iterative only.
+DESIGN:
+- Full numerical stability; OOP with interfaces for public contracts
+- Private field encapsulation; JSDoc (@param, @returns, @example)
+- Inline math formula docs; normalize inputs; track running average loss for accuracy
+- Full backpropagation over all layers
+- Train on *all* time steps (sequence-to-sequence) instead of "target = last row"
 
-HARD DESIGN CONSTRAINTS
-Full numerical stability; OOP with interfaces for public contracts
-Private field encapsulation; JSDoc (@param, @returns, @example)
-Inline math formula docs; normalize inputs; track running average loss for accuracy
+CONFIG (defaults):
+numBlocks: 3, embeddingDim: 64, numHeads: 8, ffnMultiplier: 4, attentionDropout: 0.0, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002, temporalScales: [1, 2, 4], temporalKernelSize: 3, maxSequenceLength: 512, fusionDropout: 0.0
 
-PUBLIC API (EXACT)
-class FusionTemporalTransformerRegression
-constructor(config?: Partial<Config>)
-fitOnline(data: { xCoordinates: number[][]; yCoordinates: number[][] }): FitResult
-predict(futureSteps: number): PredictionResult
-getModelSummary(): ModelSummary
-getWeights(): WeightInfo
-getNormalizationStats(): NormalizationStats
-reset(): void
-save(): string
-load(w: string): void
+API:
+fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
+predict(futureSteps: number): PredictionResult → Predictions
+getModelSummary(): ModelSummary | getWeights(): WeightInfo | getNormalizationStats(): NormalizationStats | reset(): void
+save(): string //JSON.stringify in all state data
+load(w: string) //JSON string of all state data
 
-TYPES (EXACT SHAPES, KEEP FIELD NAMES)
-type FitResult = {
-loss: number
-gradientNorm: number
-effectiveLearningRate: number
-isOutlier: boolean
-converged: boolean
-sampleIndex: number
-driftDetected: boolean
-}
+TYPES:
+FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected }
+PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
+SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
+WeightInfo { temporalConvWeights, scaleEmbeddings, positionalEncoding, fusionWeights, attentionWeights, ffnWeights, layerNormParams, outputWeights, firstMoment, secondMoment: number[][][], updateCount }
+NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
+ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embeddingDim, numHeads, temporalScales, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
 
-type SinglePrediction = {
-predicted: number[]
-lowerBound: number[]
-upperBound: number[]
-standardError: number[]
-}
+ALGORITHMS:
 
-type PredictionResult = {
-predictions: SinglePrediction[]
-accuracy: number
-sampleCount: number
-isModelReady: boolean
-}
+Fusion Temporal Transformer Architecture:
+1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length, seqLen = xCoordinates.length
+2. Temporal Positional Encoding: PE(pos,2i) = sin(pos/10000^(2i/d)), PE(pos,2i+1) = cos(pos/10000^(2i/d))
+3. Multi-Scale Temporal Convolution: For each scale s ∈ temporalScales: Fₛ = GELU(Conv1D(X, kernel=temporalKernelSize, stride=s)) ∈ ℝ^(seqLen/s × embeddingDim)
+4. Scale-Specific Embedding: Eₛ = Fₛ + PEₛ + ScaleEmb(s), learnable scale embedding per temporal resolution
+5. Cross-Scale Fusion: Fuse representations across scales via gated attention fusion: G = σ(Concat(E₁,...,Eₛ)Wg), Fused = Σ(Gₛ ⊙ Eₛ)
+6. Transformer Block × numBlocks: LayerNorm → Temporal Multi-Head Self-Attention → Residual → LayerNorm → FFN → Residual
+7. Temporal Aggregation: Pool across sequence dimension via attention-weighted mean: α = softmax(HWpool), out = Σαᵢhᵢ
+8. Output: Dense(out) → ŷ ∈ ℝ^outputDim
 
-type WeightInfo = {
-temporalConvWeights: number[][][]
-scaleEmbeddings: number[][]
-positionalEncoding: number[][]
-fusionWeights: number[][]
-attentionWeights: number[][][]
-ffnWeights: number[][][]
-layerNormParams: number[][]
-outputWeights: number[][]
-firstMoment: number[][][]
-secondMoment: number[][][]
-updateCount: number
-}
+Temporal Multi-Head Self-Attention:
+1. Project: Qₕ = XWᵠₕ, Kₕ = XWᵏₕ, Vₕ = XWᵛₕ, dₖ = embeddingDim/numHeads
+2. Temporal Mask: Apply causal or sliding window mask for temporal locality
+3. Scores: Aₕ = softmax(QₕKₕᵀ / √dₖ + TemporalBias)Vₕ
+4. Output: MultiHead = Concat(A₁,...,Aₕ)Wᵒ + b
 
-type NormalizationStats = {
-inputMean: number[]
-inputStd: number[]
-outputMean: number[]
-outputStd: number[]
-count: number
-}
+Cross-Scale Attention Fusion:
+1. Query from finest scale: Q = E₁Wᵠ
+2. Keys/Values from all scales: K = Concat(E₁,...,Eₛ)Wᵏ, V = Concat(E₁,...,Eₛ)Wᵛ
+3. Fused = softmax(QKᵀ/√d)V, captures cross-temporal dependencies
 
-type ModelSummary = {
-isInitialized: boolean
-inputDimension: number
-outputDimension: number
-numBlocks: number
-embeddingDim: number
-numHeads: number
-temporalScales: number[]
-totalParameters: number
-sampleCount: number
-accuracy: number
-converged: boolean
-effectiveLearningRate: number
-driftCount: number
-}
+Feed-Forward Network:
+FFN(x) = GELU(xW₁ + b₁)W₂ + b₂, hidden_dim = embeddingDim × ffnMultiplier
 
-CONFIG DEFAULTS (EXACT DEFAULT VALUES)
-numBlocks=3
-embeddingDim=64
-numHeads=8
-ffnMultiplier=4
-attentionDropout=0.0
-fusionDropout=0.0
-learningRate=0.001
-warmupSteps=100
-totalSteps=10000
-beta1=0.9
-beta2=0.999
-epsilon=1e-8
-regularizationStrength=1e-4
-convergenceThreshold=1e-6
-outlierThreshold=3.0
-adwinDelta=0.002
-temporalScales=[1,2,4]
-temporalKernelSize=3
-maxSequenceLength=512
+Adam + Cosine Warmup:
+1. Normalize: x̃ = (x - μ)/(σ + ε)
+2. Forward: propagate through temporal conv, fusion, transformer blocks, cache activations for backprop
+3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
+4. Backprop: ∂L/∂W via chain rule through attention, fusion, and temporal conv layers
+5. LR: warmup → cosine decay
+6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
 
-DATA CONTRACT (REMOVE AMBIGUITY)
-fitOnline receives one training sample as a sequence window:
-xCoordinates is seqLen x inputDim (seqLen = xCoordinates.length).
-yCoordinates is seqLen x outputDim (seqLen = yCoordinates.length).
-Use target y = yCoordinates[seqLen-1] (last timestep) and treat the model output ŷ as outputDim (single vector after temporal pooling).
-Also cache the latest xCoordinates window internally (clipped/padded to maxSequenceLength) for predict().
+Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ), σ² = M₂/(n-1) → inputs (normalize)
 
-predict(futureSteps):
-Compute one-step prediction from the last cached window.
-For futureSteps>1, repeat autoregressively WITHOUT inventing future x features: repeat the same one-step mean prediction, and increase uncertainty with standardError *= sqrt(stepIndex+1).
-Return predictions length = futureSteps.
-isModelReady is true only after initialization and at least 2 samples for normalization variance.
+Accuracy: track running average loss L̄ = ΣLoss/n; accuracy = 1/(1 + L̄)
 
-ARCHITECTURE (MUST IMPLEMENT)
+ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(δ); shrink window; reset stats on drift
 
-1. Auto-detect dims on first fitOnline: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length, seqLen = min(xCoordinates.length, maxSequenceLength).
-2. Online normalization:
-   Maintain Welford stats for each input feature and each output dimension.
-   Normalize x and y using current mean/std (std = sqrt(var), var from Welford M2; clamp std to >= 1e-12).
-3. Temporal positional encoding:
-   PE(pos,2i)=sin(pos/10000^(2i/d)), PE(pos,2i+1)=cos(pos/10000^(2i/d)).
-   Compute up to maxSequenceLength and cache in Float64Array; expose positionalEncoding in getWeights as number[][] for the cached length.
-4. Multi-scale temporal convolution:
-   For each scale s in temporalScales:
-   Stride = s. Output length Ls = ceil(seqLen / s).
-   Conv1D over time with kernel temporalKernelSize, using zero-padding on the left for causality (only t-k where t-k>=0).
-   Compute F_s[t,e] = GELU( sum_{k=0..K-1} sum_{f=0..inputDim-1} X[(t*s - k),f] * W_s[k,f,e] + b_s[e] ).
-5. Scale-specific embedding:
-   E_s = F_s + PE_s + ScaleEmb_s, where ScaleEmb_s is a learnable vector length embeddingDim added to every timestep.
-   PE_s uses positional encoding at the scale’s timestep index (t) with same embeddingDim.
-6. Cross-scale fusion (make lengths consistent deterministically):
-   Define fine scale as s=1 length L1=seqLen.
-   Upsample each scale s to length L1 by repetition: expanded index te = floor(t / s) clamped to [0, Ls-1].
-   Build Concat(E_1_up, E_2_up, ... E_n_up) per timestep (dimension nScales*embeddingDim).
-   Gates: G = sigmoid( Concat * Wg + bg ) where Wg maps (nScales*embeddingDim) -> (nScales*embeddingDim).
-   Split G into per-scale gate vectors length embeddingDim.
-   Fused[t,e] = sum_s ( G_s[t,e] * E_s_up[t,e] ).
-   Apply fusionDropout to fused activations (in training only) using deterministic RNG seeded from updateCount (no Math.random in hot paths; implement a small xorshift32).
-7. Transformer blocks repeated numBlocks:
-   Each block: LayerNorm -> MultiHead Self-Attention -> residual -> LayerNorm -> FFN -> residual.
-   LayerNorm per timestep over embeddingDim with learnable gamma/beta per block (store in layerNormParams).
-   FFN hiddenDim = embeddingDim*ffnMultiplier, activation GELU.
-8. Temporal aggregation (attention-weighted pooling):
-   score[t] = dot(H[t], Wpool) + bpool (Wpool length embeddingDim).
-   alpha = softmax(scores) over t.
-   out = sum_t alpha[t] * H[t].
-9. Output head:
-   ŷ = out * Wout + bout, Wout shape embeddingDim x outputDim.
+Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
 
-ATTENTION DETAILS (MUST IMPLEMENT)
-d_k = embeddingDim/numHeads (require divisible; if not, throw error on init).
-Project Q,K,V with separate weights per block:
-Q = X * Wq, K = X * Wk, V = X * Wv, each shape (L1 x embeddingDim).
-Split into heads (numHeads) with headDim=d_k.
-Causal mask: disallow attending to future positions (j>i). Implement by setting score=-1e9.
-Scaled dot-product: score = (Qi·Kj)/sqrt(d_k).
-Softmax must be numerically stable (subtract row max).
-Apply attentionDropout on attention probabilities during training (deterministic RNG).
-Head outputs concatenated then projected with Wo to embeddingDim.
-
-TRAINING / LOSS / OPTIMIZER (MUST IMPLEMENT)
-Loss: MSE on normalized outputs:
-L = (1/2) * mean_d ( (y_norm[d] - yhat_norm[d])^2 ) + (lambda/2)*sum(W^2) for all trainable weights (exclude normalization stats).
-Outlier handling:
-Compute residual r[d] = (y_norm[d] - yhat_norm[d]).
-If any |r[d]| > outlierThreshold, set sampleWeight=0.1 else 1.0. Multiply loss and all output residual grads by sampleWeight.
-Accuracy metric:
-Maintain running average loss Lbar via exponential-free running mean: Lbar = (Lbar*(n-1)+loss)/n.
-accuracy = 1/(1+Lbar).
-Learning rate schedule:
-warmup then cosine decay:
-if step < warmupSteps: lr = baseLR * (step/warmupSteps)
-else: progress = (step-warmupSteps)/max(1,totalSteps-warmupSteps), lr = baseLR * 0.5*(1+cos(pi*min(1,progress))).
-Adam update with bias correction:
-m = beta1*m + (1-beta1)*g
-v = beta2*v + (1-beta2)*g*g
-mhat = m/(1-beta1^t)
-vhat = v/(1-beta2^t)
-W -= lr * mhat/(sqrt(vhat)+epsilon)
-Implement L2 regularization by adding lambda*W to gradient g before Adam.
-Track gradientNorm = sqrt(sum(g^2)) over all parameters for this step.
-Convergence:
-converged = gradientNorm < convergenceThreshold.
-
-BACKPROP REQUIREMENT (MUST IMPLEMENT)
-Implement a fully-expanded backward pass through:
-Output head, pooling softmax, transformer blocks (LN, MHA, FFN, residuals), fusion gating, scale embeddings, positional encoding addition (no grads for fixed PE), temporal conv per scale, and normalization (do not backprop into Welford stats; normalization uses current mean/std treated as constants).
-Cache all necessary forward activations per layer for backprop; reuse buffers and overwrite where safe.
-Implement stable LayerNorm backward (with epsilon).
-Implement softmax backward for pooling and attention.
-Implement GELU forward and backward (approx ok but must be stable).
-Include optional global gradient clipping by norm at 5.0 (apply if norm > 5; scale all grads) to prevent explosions.
-
-ADWIN DRIFT DETECTION (MUST IMPLEMENT, LIGHTWEIGHT)
-Maintain an error window of recent losses (normalized, after outlier weight) up to a fixed cap (e.g., 256) in a ring buffer.
-On each step after a minimum size (e.g., 32), test a split point that minimizes |mean_left-mean_right| significance using a simplified epsilon cut:
-eps = sqrt( (2*log(2/delta)) * (1/n_left + 1/n_right) )
-If |mean_left-mean_right| > eps, driftDetected=true, increment driftCount, and reset the window (but DO NOT wipe model weights; only reset window and optionally reset running loss Lbar to current loss).
-Use adwinDelta as delta.
-
-NUMERICAL STABILITY (MUST)
-No NaN/Infinity propagation: clamp denominators, add epsilons, guard sqrt, guard exp overflow.
-Softmax: subtract max; if all masked, fall back to uniform over allowed positions.
-LayerNorm variance clamp to >= 1e-12.
-Standard deviation clamp to >= 1e-12.
-Use f32-safe constants only if needed; computations in Float64.
-
-STATE / SERIALIZATION (MUST)
-save(): JSON.stringify of a plain object containing:
-config, dims, sampleCount, updateCount, driftCount, runningLoss, and ALL weights, moments, and normalization stats.
-Represent Float64Array as regular number[] in JSON.
-load(w): restore everything; validate shapes; rehydrate as Float64Array; set isInitialized accordingly.
-reset(): reinitialize all trainable weights with stable init (Xavier/He appropriate), zero moments, reset counters and drift window; keep config.
-
-WEIGHT INITIALIZATION (MUST)
-Conv and linear weights: Xavier uniform (limit = sqrt(6/(fanIn+fanOut))) or He for GELU; choose one consistently and document in a short comment.
-Biases start at 0.
-LayerNorm gamma start 1, beta 0.
-Scale embeddings small normal/uniform (e.g., ±0.02).
-
-INTERNAL DESIGN (MUST)
-Use private fields for all state.
-Expose only requested methods.
-Implement small internal helpers:
-pack2D/ unpack2D for returning WeightInfo as number arrays (only in getters/save; not in hot path).
-matMul, addBias, layerNorm, softmax, gelu, conv1D, attentionForward/backward, ffnForward/backward.
-Implement a deterministic RNG (xorshift32) for dropout with a seed derived from updateCount.
-
-FINAL CHECKLIST
-All required types and methods exist and match names.
-fitOnline updates normalization stats, forward, backward, Adam step, metrics, drift detection.
-predict uses cached last window; returns bounds via ±1.96*standardError; standardError derived from running output residual variance per output dim (maintain online residual M2).
-getWeights/getNormalizationStats/getModelSummary return current state in requested shapes.
-No heavy allocations inside fitOnline forward/backward loops.
+Export: FusionTemporalTransformerRegression
