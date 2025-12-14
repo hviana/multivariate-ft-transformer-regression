@@ -185,7 +185,7 @@ interface SerializableState {
   outputM2: number[] | null;
   adwinWindow: number[];
   weights: {
-    temporalConvW: number[][][];
+    temporalConvW: number[][];
     temporalConvB: number[][];
     scaleEmb: number[][];
     posEnc: number[];
