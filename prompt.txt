@@ -19,7 +19,6 @@ DESIGN:
 - Private field encapsulation; JSDoc (@param, @returns, @example)
 - Inline math formula docs; normalize inputs; track running average loss for accuracy
 - Full backpropagation over all layers
-- Train on *all* time steps (sequence-to-sequence) instead of "target = last row"
 
 CONFIG (defaults):
 numBlocks: 3, embeddingDim: 64, numHeads: 8, ffnMultiplier: 4, attentionDropout: 0.0, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002, temporalScales: [1, 2, 4], temporalKernelSize: 3, maxSequenceLength: 512, fusionDropout: 0.0
