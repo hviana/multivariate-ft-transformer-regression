@@ -2573,7 +2573,7 @@ export class FusionTemporalTransformerRegression {
     const { epsilon } = this.config;
 
     // Use last input sequence for prediction
-    let currentInput = this.lastInput.map((row) => Float64Array.from(row));
+    let currentInput: any = this.lastInput.map((row) => Float64Array.from(row));
 
     for (let step = 0; step < futureSteps; step++) {
       // Create temporary cache if needed
@@ -2584,7 +2584,7 @@ export class FusionTemporalTransformerRegression {
       // Forward pass (with dummy target for shape)
       const dummyTarget = new Array(this.outputDim).fill(0);
       this.forward(
-        currentInput.map((row) => Array.from(row)),
+        currentInput.map((row: any) => Array.from(row)),
         dummyTarget,
         this.cache,
       );
