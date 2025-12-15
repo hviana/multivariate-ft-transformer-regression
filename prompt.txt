@@ -1,4 +1,4 @@
-Implement TypeScript library "FusionTemporalTransformerRegression": a Fusion Temporal Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, and Welford z-score normalization.
+Implement TypeScript library "PatchTSTRegression": a PatchTST (Patch-based Time Series Transformer) neural network for multivariate regression with incremental online learning, Adam optimizer, and Welford z-score normalization.
 
 SCOPE AND GOALS
 Build a single self-contained TypeScript library (no heavy runtime deps) that trains online (one sample at a time) and predicts multiple steps ahead.
@@ -6,7 +6,7 @@ Primary use-case is tight CPU and memory environments, so the implementation mus
 
 PERFORMANCE PRINCIPLES (HARD REQUIREMENTS)
 Fixed-size memory: preallocate all parameter, gradient, optimizer-moment, and scratch buffers once at initialization; never grow during training.
-Bounded attention memory: do not allocate O(seqLen^2) attention score/weight matrices; implement streaming or tiled attention using fixed reusable blocks.
+Bounded attention memory: do not allocate O(seqLen^2) attention score/weight matrices; implement streaming or tiled attention using fixed reusable blocks. (For PatchTST, attention length is numberOfPatches, but the same constraint applies.)
 Typed-array only core: all tensors live in contiguous Float64Array slabs in row-major layout; expose zero-copy views via (data, offset, shape, strides).
 No hot-path allocations: forward(), backward(), fitOnline() must allocate 0 arrays/objects per call; all temporaries come from TensorArena and BufferPool.
 Strict reuse policy: rent scratch buffers by size class, return immediately; no new Float64Array inside inner loops.
@@ -60,13 +60,15 @@ maxSequenceLength: 512
 fusionDropout: 0.0
 
 ARCHITECTURE OVERVIEW
-FusionTemporalTransformerRegression is the public facade and owns all state.
+PatchTSTRegression is the public facade and owns all state.
+PatchTST core idea: convert each input channel into a sequence of patch tokens (each token represents a contiguous window of the series), add positional and (optional) scale embeddings, then run a channel-independent Transformer encoder (shared weights across channels) over patch tokens. Produce an aggregated representation per channel, then map to outputs.
+Multi-scale patching uses temporalScales as patchScale multipliers applied to a base patch length derived from temporalKernelSize (and/or a deterministic rule described in code). Different scales produce different patch streams that are aligned/fused using a gated fusion module (fusionDropout applies here).
 Training step pipeline: validate shapes and caps, update normalizers, normalize input/target, forward pass, compute robust weighted loss, backward pass, clip gradients, schedule LR, Adam step, update residual stats, ADWIN drift update, optional drift strategy actions.
 Inference pipeline: forward pass on last normalized sequence, denormalize outputs, compute standard error and bounds, optional autoregressive rolling of the stored normalized sequence.
 
 CLASSES (MUST IMPLEMENT THESE EXACT NAMES AND ROLES)
 
-FusionTemporalTransformerRegression (PUBLIC FACADE)
+PatchTSTRegression (PUBLIC FACADE)
 Owns all state and exposes fitOnline(), predict(), getModelSummary(), getWeights(), getNormalizationStats(), reset(), save(), load().
 Delegates to normalization, model graph, loss/backprop, optimizer, drift, metrics, serialization.
 Enforces shape contracts, deterministic caps, and typed-array-only hot paths.
@@ -74,7 +76,7 @@ Enforces shape contracts, deterministic caps, and typed-array-only hot paths.
 ModelCore (NETWORK ORCHESTRATOR)
 forward(seqXNorm: Float64Array, seqLen: number, inputDim: number): ForwardContext
 backward(ctx: ForwardContext, dLoss_dyPredNorm: Float64Array): void
-Composed of InputProjector, TemporalConvBank, CrossScaleFusion, TransformerStack, AttentionPooling, OutputHead.
+Composed of PatchMaker, PatchEmbeddingBank, PositionalEncodingCache, PatchScaleFusion, ChannelIndependentTransformer, AttentionPooling, OutputHead.
 Never allocates in hot paths; all temporary tensors come from TensorArena and BufferPool.
 
 ParameterStore (WEIGHTS, GRADS, MOMENTS REGISTRY)
@@ -157,7 +159,7 @@ Default actions: reset optimizer moments, temporary LR reduction, optional norma
 
 ForwardContext (MINIMAL TRAINING TAPE)
 Holds only references and offsets into TensorArena needed for backprop.
-Includes (as offsets/views): E0, per-scale conv outputs, aligned scale buffers, fusion gates/stats, per-block LN stats, Q/K/V tile buffers, attention tile buffers, FFN activations, pooling weights, agg vector, yPredNorm.
+Includes (as offsets/views): normalized input view, per-channel patch buffers, per-scale patch token embeddings, aligned/fused patch token sequence, per-block LN stats, Q/K/V tile buffers, attention tile buffers, FFN activations, pooling weights, agg vector(s), yPredNorm.
 No deep object graphs; allocated once and reused as a mutable container.
 
 Layer Interfaces (INTERNAL CONTRACTS, LIGHTWEIGHT)
@@ -165,21 +167,31 @@ ILayer: forward(in: TensorView, ctx: ForwardContext): TensorView; backward(dOut:
 ITrainableLayer: exposes parameter ids/slices in ParameterStore
 Avoid virtual calls in inner loops when possible (prefer direct method calls inside ModelCore).
 
-InputProjector
-Projects (seqLen,inputDim) to (seqLen,embeddingDim) using W_in and b_in; writes into arena.
+PatchMaker
+Deterministically converts a (seqLen,inputDim) sequence into per-channel patch matrices.
+Computes patchCount = floor((seqLen - patchLen)/stride) + 1 with deterministic handling when seqLen < patchLen (pad/truncate policy must be deterministic and allocation-free).
+Supports multi-scale patching: temporalScales defines scale multipliers for patchLen and/or stride; patchLenBase derived from temporalKernelSize (or a fixed deterministic function of it).
+Produces patchRaw views that are reused buffers in TensorArena.
 
-TemporalConvBank
-Multi-scale causal/same convs over E0 using per-scale convolution weights and temporalKernelSize.
-Adds positional encodings and scale embeddings, applies GELU in-place.
-Aligns different temporal scales into a common timeline buffer (internal helper, not a new public class).
+PatchEmbeddingBank
+For each scale and channel, projects each raw patch (length patchLen) into embeddingDim with a linear layer (W_patch, b_patch).
+Optionally applies a lightweight pre-embedding temporal filter using temporalKernelSize (implemented as in-place convolution over the raw channel sequence into a scratch buffer, then patched), but must be optional and must not allocate.
+Applies GELU in-place after projection.
+Adds scale embeddings (one embedding per scale) and positional encodings (per patch position) from PositionalEncodingCache.
 
 PositionalEncodingCache
-Precomputes positional encodings once per (scale,length) up to maxSequenceLength; stored in cache.
+Precomputes positional encodings once per (patchCount,length) up to limits derived from maxSequenceLength and minimum stride; stored in cache.
 Provides zero-copy views, no recomputation.
 
-CrossScaleFusion
-Computes per-scale gates (sigmoid or softmax across scales) and fused embedding sequence.
-Stores gate logits/weights in ForwardContext for backprop.
+PatchScaleFusion
+Fuses multi-scale patch token streams into a single patch token stream per channel using learned gates (sigmoid or softmax across scales).
+Uses fusionDropout (if nonzero) deterministically.
+Stores gate logits/weights and any required fusion intermediates in ForwardContext for backprop.
+
+ChannelIndependentTransformer
+Implements PatchTST encoder: runs the same TransformerStack weights across channels independently (treat channels as an outer loop, not a batch dimension that allocates new tensors).
+For each channel, runs numBlocks TransformerBlock forward passes over that channel’s patch token sequence.
+Must reuse attention tiling buffers and arena scratch across channels; never allocate per channel.
 
 TransformerStack
 Holds numBlocks TransformerBlock instances.
@@ -193,12 +205,12 @@ LayerNorm
 In-place LN forward/backward with gamma/beta parameters and stable epsilon.
 
 MultiHeadSelfAttention
-Projects Q/K/V, applies causal mask, stable softmax, computes head outputs and final projection.
+Projects Q/K/V, applies optional causal mask (configurable policy: PatchTST can be causal or non-causal; choose one deterministic default and document it), stable softmax, computes head outputs and final projection.
 Supports RelPosBias in score computation.
 Must use streaming/tiled attention with fixed buffers (tileQ x tileK) allocated once; no full score/weight matrices.
 
 RelPosBias
-Stores learnable relative position bias table or computed bias; fast lookup by (i-j) index.
+Stores learnable relative position bias table or computed bias; fast lookup by (i-j) index in patch-token coordinates.
 
 FeedForward
 Two linear layers with GELU, hiddenDim = embeddingDim * ffnMultiplier.
@@ -209,11 +221,12 @@ Generates dropout masks into preallocated buffers using DeterministicRNG and ste
 If dropout is 0.0, it must be fully bypassed with near-zero overhead.
 
 AttentionPooling
-Computes pooling logits and weights over time, produces agg vector.
+Computes pooling logits and weights over patch tokens, produces agg vector per channel (or a single fused agg, depending on output head design).
 Stores pooling weights/logits in ForwardContext for backward.
 
 OutputHead
-Linear head mapping agg vector to yPredNorm using W_out and b_out.
+Maps aggregated representation(s) to yPredNorm using W_out and b_out.
+Must support outputDim possibly different from inputDim (multivariate regression targets).
 Predict path denormalizes using OnlineNormalizer.
 
 ModelMetrics (SUMMARY AND READBACK)
@@ -238,12 +251,21 @@ PSEUDOCODE (IMPLEMENTATION PLAN)
 Initialization strategy
 Constructor stores merged config and creates subsystem objects without allocating large slabs.
 ensureInitialized(seqLen, inputDim, outputDim) runs once:
-Allocate ParameterStore.W/G/M/V as contiguous Float64Array buffers with deterministic sizes derived from config and dims.
+Allocate ParameterStore.W/G/M/V as contiguous Float64Array buffers with deterministic sizes derived from config and dims, including PatchMaker/PatchEmbeddingBank weights, fusion weights, Transformer weights, pooling weights, and output head weights.
 Create and pool TensorView slices for every tensor region.
 Apply Initializer with DeterministicRNG.
-Configure TensorArena slabs based on maxSequenceLength, dims, embeddingDim, ffnMultiplier, numHeads, temporalScales, temporalKernelSize, and attention tiling parameters.
-Build ModelCore graph and bind layers to ParameterStore views and arena buffers.
-Allocate facade scratch vectors (outputDim): yTargetNorm, dLoss_dyPredNorm, residualNorm.
+Derive patching hyperparameters deterministically from config:
+
+* basePatchLen: a deterministic function of temporalKernelSize (e.g., basePatchLen = max(2, temporalKernelSize * 4) or another fixed rule documented in code)
+* per-scale patchLen[s] = basePatchLen * temporalScales[s]
+* per-scale stride[s] = max(1, patchLen[s] / 2) or another fixed rule documented in code
+  Compute maximum patchCount supported under maxSequenceLength and min stride; allocate TensorArena slabs accordingly:
+* raw patch buffers (per channel, per scale) reused
+* patch token embeddings (per channel, per scale) reused
+* fused patch token buffer (per channel) reused
+* Transformer activations and attention tiling buffers sized to maxPatchCount (not seqLen)
+  Build ModelCore graph and bind layers to ParameterStore views and arena buffers.
+  Allocate facade scratch vectors (outputDim): yTargetNorm, dLoss_dyPredNorm, residualNorm.
 
 fitOnline({ xCoordinates, yCoordinates }) flow
 Validate xCoordinates is [seqLen][inputDim].
@@ -271,24 +293,27 @@ Increment stepIndex and sampleCount.
 Return FitResult with loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected.
 
 ModelCore.forward(seqXNorm, seqLen, inputDim) outline
-InputProjector writes E0 (seqLen, embeddingDim) into arena.
-TemporalConvBank computes per-scale conv embeddings from E0, adds positional encodings and scale embeddings, GELU in-place.
-TemporalConvBank aligns scale outputs into common timeline buffers in arena.
-CrossScaleFusion computes gates and fused embedding Efused and records gate stats in ctx.
-TransformerStack runs numBlocks TransformerBlock forward passes using pre-LN residual structure.
-MultiHeadSelfAttention must compute attention via fixed tiling: iterate query blocks and key blocks, accumulate stable softmax in streaming form, store only minimal per-tile info needed for backward in ctx.
-AttentionPooling produces agg vector and stores pooling weights/logits.
-OutputHead produces yPredNorm view in arena and stores it in ctx.
-Return ctx.
+PatchMaker produces per-channel raw patch matrices for each scale using deterministic patchLen/stride rules; writes into arena buffers.
+PatchEmbeddingBank projects patches into embeddingDim tokens; adds scale embeddings and positional encodings; GELU in-place; stores per-scale token streams in ctx.
+PatchScaleFusion computes gates across scales and produces a single fused patch-token sequence per channel; records gate stats in ctx.
+ChannelIndependentTransformer loops channels:
+
+* runs TransformerStack over that channel’s fused patch-token sequence
+* MultiHeadSelfAttention must compute attention via fixed tiling over patchCount: iterate query blocks and key blocks, accumulate stable softmax in streaming form, store only minimal per-tile info needed for backward in ctx
+  AttentionPooling produces agg vector(s) and stores pooling weights/logits.
+  OutputHead produces yPredNorm view in arena and stores it in ctx.
+  Return ctx.
 
 ModelCore.backward(ctx, dLoss_dyPredNorm) outline
 Backprop through OutputHead to dAgg and parameter grads.
 Backprop through AttentionPooling to dH and pooling parameter grads.
-Backprop through TransformerStack blocks in reverse order, accumulating grads in ParameterStore.
-Backprop through CrossScaleFusion to aligned scale grads and fusion parameter grads.
-Backprop through TemporalConvBank per scale (including GELU and conv grads) and alignment reversal.
-Backprop through InputProjector to W_in/b_in grads.
-Do not allocate new buffers; reuse arena scratch and ctx offsets.
+Backprop through ChannelIndependentTransformer:
+
+* for each channel, backprop through TransformerStack blocks in reverse order, accumulating grads in ParameterStore
+  Backprop through PatchScaleFusion to per-scale token grads and fusion parameter grads.
+  Backprop through PatchEmbeddingBank to patch projection weights and to raw patch grads (if needed for optional pre-embedding filter grads).
+  Backprop through PatchMaker only if required by any learnable pre-embedding filter; otherwise stop at normalized input.
+  Do not allocate new buffers; reuse arena scratch and ctx offsets.
 
 predict(futureSteps) flow
 If not initialized or no cached last sequence, return empty predictions with isModelReady false.
@@ -310,4 +335,3 @@ Reinitialize or reset weights deterministically, reset optimizer moments, normal
 save() and load(w)
 save serializes config, dims, counters, normalizer state, residual stats, drift state, optimizer state, and ParameterStore buffers deterministically into JSON.
 load parses JSON, validates schema, ensures initialized with correct dims, restores into existing buffers when sizes match; if mismatch, rebuild ParameterStore and ModelCore deterministically, then restore; restore cached last sequence into a reusable buffer.
-
